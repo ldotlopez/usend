@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import time
+from datetime import datetime
+
 import gi
 gi.require_version('GLib', '2.0')
 gi.require_version('Gst', '1.0')
@@ -17,28 +20,65 @@ def parse_element_message(message):
     return ret
 
 
-class App():
-    """
-    gst-launch-1.0 -m v4l2src ! 'image/jpeg,width=1280,height=720' ! decodebin ! tee name=t \
-        t. ! queue ! xvimagesink async=true \
-        t. ! queue ! videoconvert ! motioncells ! fakesink
-    """
-    PIPELINE = """
-    v4l2src ! 'image/jpeg,width=1280,height=720' ! decodebin ! tee name=t \
-        t. ! queue ! xvimagesink async=true \
-        t. ! queue ! videoscale ! 'video/x-raw,width=160,height=120' ! videoconvert ! motioncells gap=1 ! fakesink
+class Beacon:
+    EVENTS = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._handlers = {name: set() for name in self.EVENTS}
+
+    def emit(self, name, **kwargs):
+        for (fn) in self._handlers[name]:
+            fn(self, **kwargs)
+
+    def watch(self, name, fn):
+        self._handlers[name].add(fn)
+
+    def unwatch(self, name, fn):
+        self._handlers[name].remove(fn)
+
+
+class Motion(Beacon):
+    EVENTS = ['ready', 'begin', 'finished', 'eos', 'error']
+
+    MAIN = """
+        v4l2src \
+        ! image/jpeg,width=1280,height=720 \
+        ! decodebin \
+        ! videoconvert \
+        ! tee name=output \
+        ! videoscale \
+        ! video/x-raw,width=160,height=120 \
+        ! videoconvert \
+        ! motioncells name=motion-detector gap=1 \
+        ! queue \
+        ! fakesink
     """
 
-    # VIDEOSRC = "v4l2src ! 'image/jpeg,width=1280,height=720' ! decodebin ! tee name=output ! autovideosink"
-    MAIN = """
-        v4l2src ! image/jpeg,width=1280,height=720 ! decodebin ! videoconvert ! tee name=output \
-        ! videoscale ! video/x-raw,width=160,height=120 ! videoconvert ! motioncells gap=1 ! fakesink
-    """
-    LIVE = "queue name=live-input ! xvimagesink async=true"
+    SUB_PIPES = {
+        'live': """
+            queue name=live-input \
+            ! xvimagesink async=true
+        """,
+
+        'snapshot': """
+            queue name=capture-image-input \
+            ! jpegenc snapshot=true \
+            ! filesink location=a.jpg
+        """,
+
+        'encode': """
+            queue name=encode-input \
+            ! encodebin profile=application/ogg:video/x-theora:audio/x-vorbis \
+            ! queue \
+            ! filesink location={output}
+        """
+    }
 
     def __init__(self):
+        super().__init__()
         self.subpipelines = {}
-        self.motion_ready = False
+        self._event_counter = 0
 
     def parse(self, desc, *args, **kwargs):
         try:
@@ -47,15 +87,23 @@ class App():
             print(repr(e))
             raise
 
-    def link(self, name, description):
-        print("Connect", name, description.strip())
-        subpipeline = self.parse(description.strip())
+    def link(self, name, **params):
+        description = self.SUB_PIPES[name].strip()
+        description = description.format(**params)
+
+        print("Connect", name, description)
+        sub_pipe = self.parse(description)
+        sub_pipe.name = name + '-pipeline'
         src = self.pipeline.get_by_name('output')
-        sink = subpipeline.get_by_name(name + '-input')
-        self.pipeline.add(subpipeline)
+        sink = sub_pipe.get_by_name(name + '-input')
+        self.pipeline.set_state(Gst.State.PAUSED)
+        time.sleep(1)
+        self.pipeline.add(sub_pipe)
         src.link(sink)
-        subpipeline.set_state(Gst.State.PLAYING)
-        self.subpipelines[name] = subpipeline
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+        self.subpipelines[name] = sub_pipe
+        return sub_pipe
 
     def unlink(self, name):
         if name not in self.subpipelines:
@@ -69,29 +117,53 @@ class App():
         self.subpipelines[name].set_state(Gst.State.NULL)
         del(self.subpipelines[name])
 
-    def capture(self):
-        self.link('live', self.LIVE)
+    def snapshot(self):
+        self.link('capture-image')
+
+        # def on_msg(bus, msg):
+        #     print("snapshot bus:", msg.type)
+        #     return True
+
+        # snapshot = self.link('capture-image', start=False)
+        # snapshot.get_bus().add_watch(GLib.PRIORITY_DEFAULT, on_msg, None)
+        # snapshot.set_state(Gst.State.PLAYING)
+
+    def capture(self, output):
+        self.link('live', outout=output)
 
     def uncapture(self):
         self.unlink('live')
 
     def run(self):
-        def _run():
-            self.pipeline = self.parse(self.MAIN)
-            bus = self.pipeline.get_bus()
-            bus.add_signal_watch()
-            bus.connect("message", self.on_bus_message)
-            self.pipeline.set_state(Gst.State.PLAYING)
-            return False
+        self.pipeline = self.parse(self.MAIN)
+        self.pipeline.set_property("message-forward", True)
 
-        GLib.idle_add(_run)
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message", self.on_bus_message)
+
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+    def stop(self):
+        self.pipeline.set_state(Gst.State.NULL)
+        self.pipeline = None
+
+    def start_live(self):
+        self.link('live')
+
+    def stop_live(self):
+        self.unlink('live')
+
+    def start_capture(self, output):
+        self.link('encode', output=output)
+
+    def stop_capture(self):
+        self.unlink('encode')
 
     def on_bus_message(self, bus, message):
         ignore_types = [
             Gst.MessageType.ASYNC_DONE,
-            # Gst.MessageType.ELEMENT,
             Gst.MessageType.NEW_CLOCK,
-            Gst.MessageType.STATE_CHANGED,
             Gst.MessageType.STREAM_START,
             Gst.MessageType.STREAM_STATUS,
         ]
@@ -99,34 +171,97 @@ class App():
         if message.type in ignore_types:
             return
 
-        if message.type == Gst.MessageType.ERROR:
-            errglib, errstr = message.parse_error()
-            print(errglib.message)
+        # msg = "[MSG] {name}\t{type}"
+        # msg = msg.format(name=message.src.name,
+        #                  type=str(message.type.first_value_name))
+        # print(msg)
 
-        elif message.type == Gst.MessageType.ELEMENT:
-            print("Message from", message.src.name)
+        # if message.type == Gst.MessageType.STATE_CHANGED:
+        #     old, new, pending = message.parse_state_changed()
+        #     print("({}) {} -> {}".format(pending, old, new))
+
+        if message.type == Gst.MessageType.ELEMENT:
             msgparams = parse_element_message(message)
-            print(repr(msgparams))
+            # print("Message from", message.src.name)
+            # print(repr(msgparams))
 
-            if 'motion_begin' in msgparams:
-                if self.motion_ready:
-                    self.capture()
-                else:
-                    self.motion_ready = True
+            if message.src is self.pipeline.get_by_name('motion-detector'):
+                self.on_motion_detector_message(msgparams)
 
-            if 'motion_finished' in msgparams and self.motion_ready:
-                self.uncapture()
+            else:
+                # Handle messages from other elements
+                pass
 
         elif message.type == Gst.MessageType.EOS:
-            print("Got EOS")
+            print("Got EOS from", message.src.name)
+            self.emit('eos')
+
+        elif message.type == Gst.MessageType.ERROR:
+            gerror, strerror = message.parse_error()
+            self.emit("error", gerror=gerror, strerror=strerror)
 
         else:
-            print(message.type)
+            pass
+
+    def on_motion_detector_message(self, params):
+        if 'motion_begin' in params:
+            ev = 'begin'
+        elif 'motion_finished' in params:
+            ev = 'finished'
+        else:
+            raise NotImplementedError()
+
+        self._event_counter = self._event_counter + 1
+
+        if self._event_counter == 2:
+            self.emit('ready')
+
+        if self._event_counter < 3:
+            return
+
+        self.emit(ev)
+
+
+class App:
+    def __init__(self):
+        self.loop = GLib.MainLoop()
+        self.motion = Motion()
+        self.motion.watch('ready', lambda x: print("Ready"))
+        self.motion.watch('begin', self.on_motion_begin)
+        self.motion.watch('finished', self.on_motion_finished)
+        self.motion.watch('eos', self.on_eos)
+        self.motion.watch('error', self.on_error)
+
+    def run(self):
+        def _run():
+            self.motion.run()
+            return False
+
+        GLib.idle_add(_run)
+        self.loop.run()
+
+    def quit(self):
+        self.motion.stop()
+        self.loop.quit()
+
+    def on_motion_begin(self, _):
+        print("Motion begin")
+        self.motion.start_capture(datetime.now().strftime('%Y.%m.%d-%H.%M.%S.ogv'))
+        self.motion.start_live()
+
+    def on_motion_finished(self, _):
+        print("Motion end")
+        self.motion.stop_capture()
+        self.motion.stop_live()
+
+    def on_eos(self, _):
+        self.quit()
+
+    def on_error(self, _, gerror, strerror):
+        print(gerror.message)
 
 
 if __name__ == '__main__':
     Gst.init([])
-    loop = GLib.MainLoop()
     app = App()
     app.run()
-    loop.run()
