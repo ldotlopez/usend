@@ -73,9 +73,10 @@ gst-launch-1.0 -m v4l2src ! decodebin ! videoconvert ! motioncells ! videoconver
 ### OpenCV Appendix
 
 ```
-sudo mkdir -p /usr/share/OpenCV/haarcascades
-wget -O - https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml \
-	| sudo tee -a "/usr/share/OpenCV/haarcascades/haarcascade_frontalface_default.xml"
+TMPD="$(mktemp -d)"
+git clone https://github.com/opencv/opencv.git "$TMPD"
+sudo mkdir -p /usr/share/OpenCV/haarcascades/
+cp "$TMPD"/data/haarcascades/*.xml "/usr/share/OpenCV/haarcascades/"
 ```
 
 ### Camnoopy PT100
