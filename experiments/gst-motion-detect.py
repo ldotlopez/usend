@@ -18,16 +18,66 @@ def parse_element_message(message):
 
 
 class App():
+    """
+    gst-launch-1.0 -m v4l2src ! 'image/jpeg,width=1280,height=720' ! decodebin ! tee name=t \
+        t. ! queue ! xvimagesink async=true \
+        t. ! queue ! videoconvert ! motioncells ! fakesink
+    """
     PIPELINE = """
-    v4l2src ! decodebin ! videoconvert ! motioncells name=motion ! videoconvert ! autovideosink
+    v4l2src ! 'image/jpeg,width=1280,height=720' ! decodebin ! tee name=t \
+        t. ! queue ! xvimagesink async=true \
+        t. ! queue ! videoscale ! 'video/x-raw,width=160,height=120' ! videoconvert ! motioncells gap=1 ! fakesink
     """
 
+    # VIDEOSRC = "v4l2src ! 'image/jpeg,width=1280,height=720' ! decodebin ! tee name=output ! autovideosink"
+    MAIN = """
+        v4l2src ! image/jpeg,width=1280,height=720 ! decodebin ! videoconvert ! tee name=output \
+        ! videoscale ! video/x-raw,width=160,height=120 ! videoconvert ! motioncells gap=1 ! fakesink
+    """
+    LIVE = "queue name=live-input ! xvimagesink async=true"
+
     def __init__(self):
-        pass
+        self.subpipelines = {}
+        self.motion_ready = False
+
+    def parse(self, desc, *args, **kwargs):
+        try:
+            return Gst.parse_launch(desc.strip(), *args, **kwargs)
+        except GLib.Error as e:
+            print(repr(e))
+            raise
+
+    def link(self, name, description):
+        print("Connect", name, description.strip())
+        subpipeline = self.parse(description.strip())
+        src = self.pipeline.get_by_name('output')
+        sink = subpipeline.get_by_name(name + '-input')
+        self.pipeline.add(subpipeline)
+        src.link(sink)
+        subpipeline.set_state(Gst.State.PLAYING)
+        self.subpipelines[name] = subpipeline
+
+    def unlink(self, name):
+        if name not in self.subpipelines:
+            return
+
+        sink = self.pipeline.get_by_name(name + '-input')
+        src = self.pipeline.get_by_name('output')
+        src.unlink(sink)
+
+        self.pipeline.remove(self.subpipelines[name])
+        self.subpipelines[name].set_state(Gst.State.NULL)
+        del(self.subpipelines[name])
+
+    def capture(self):
+        self.link('live', self.LIVE)
+
+    def uncapture(self):
+        self.unlink('live')
 
     def run(self):
         def _run():
-            self.pipeline = Gst.parse_launch(self.PIPELINE.strip())
+            self.pipeline = self.parse(self.MAIN)
             bus = self.pipeline.get_bus()
             bus.add_signal_watch()
             bus.connect("message", self.on_bus_message)
@@ -50,11 +100,22 @@ class App():
             return
 
         if message.type == Gst.MessageType.ERROR:
-            import ipdb; ipdb.set_trace(); pass
+            errglib, errstr = message.parse_error()
+            print(errglib.message)
 
         elif message.type == Gst.MessageType.ELEMENT:
             print("Message from", message.src.name)
-            print(repr(parse_element_message(message)))
+            msgparams = parse_element_message(message)
+            print(repr(msgparams))
+
+            if 'motion_begin' in msgparams:
+                if self.motion_ready:
+                    self.capture()
+                else:
+                    self.motion_ready = True
+
+            if 'motion_finished' in msgparams and self.motion_ready:
+                self.uncapture()
 
         elif message.type == Gst.MessageType.EOS:
             print("Got EOS")
