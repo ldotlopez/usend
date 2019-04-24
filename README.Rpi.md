@@ -21,6 +21,57 @@ network={
 }
 </pre>
 
+
+
+## Google Voice Hat
+
+### Setup audio output
+
+1. Enable overlay:
+
+Add `dtoverlay=googlevoicehat-soundcard` to `/boot/config.txt`
+
+Optional: Disable own rpi sound card adding `dtparam=audio=off`
+
+2. Set hat as default device
+
+List cards with `cat /proc/asound/cards`
+
+Write `/etc/asound.conf` similar to this:
+```
+pcm.!default {
+  type plug
+  slave {
+    pcm "hw:sndrpigooglevoi,0"
+  }
+}
+
+ctl.!default {
+    type hw
+    card sndrpigooglevoi
+}
+```
+
+3. Test
+
+Use `aplay test.wav`
+
+### AIY board
+
+sudo apt-get install y \
+	git \
+	ipython \
+	libjpeg-dev \
+	python3-ipdb \
+	python3-ipython \
+	python3-pip \
+	python3-setuptools
+
+python3 \
+	-m pip install \
+	'git+https://github.com/google/aiyprojects-raspbian.git#egg=aiy-projects-python&subdirectory=src'
+
+
 ## Enable USB boot
 
 _USB boot is available on the Raspberry Pi 3B, 3B+, 3A+ and Raspberry Pi 2B v1.2 models only._
@@ -39,6 +90,28 @@ _USB boot is available on the Raspberry Pi 3B, 3B+, 3A+ and Raspberry Pi 2B v1.2
 $ vcgencmd otp_dump | grep 17:
 17:3020000a
 ```
+
+## Bluetooth
+
+1. Add pi to bluetoothctl
+
+`sudo adduser pi bluetoothctl`
+
+See: `/etc/dbus-1/system.d/bluetooth.conf`
+
+2. Reboot
+
+`sudo reboot`
+
+3. Check
+```
+pi@raspberrypi:~ $ bluetoothctl
+[NEW] Controller B8:27:EB:DD:AC:B8 raspberrypi [default]
+```
+
+apt install bluealsa python3-gi python3-pydbus python-gobject python-dbus
+
+https://github.com/nicokaiser/rpi-audio-receiver/blob/master/install-bluetooth.sh
 
 
 ## Rotate display

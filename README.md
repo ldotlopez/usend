@@ -1,5 +1,7 @@
 # Housekeeper OS
+
 Base image:
+
 https://downloads.raspberrypi.org/raspbian_lite_latest
 
 Install packages:
@@ -12,13 +14,23 @@ sudo apt-get install -yqq \
 	git \
 	iftop \
 	iotop \
+	net-tools \
 	python3-virtualenv \
 	tmux \
 	vim \
 	virtualenvwrapper
+	python3-venv virtualenvwrapper \
+	raspberrypi-sys-mods \
+	telnet \
+	vim
+
+sudo update-alternatives --set editor /usr/bin/vim.basic
 sudo rpi-update
 sudo reboot
 ```
+
+Links:
+(read-only file system)[https://github.com/adafruit/Raspberry-Pi-Installer-Scripts/blob/master/read-only-fs.sh]
 
 
 ## Videosec
@@ -48,6 +60,16 @@ gst-launch-1.0 v4l2src \
 	! fbdevsink
 ```
 
+Motion detection:
+
+gst-launch-1.0 -m v4l2src ! decodebin ! videoconvert ! motioncells ! videoconvert ! autovideosink
+
+
+#### Links:
+
+[https://wiki.oz9aec.net/index.php?title=Gstreamer_cheat_sheet](https://wiki.oz9aec.net/index.php?title=Gstreamer_cheat_sheet)
+
+
 ### OpenCV Appendix
 
 ```
@@ -55,3 +77,18 @@ sudo mkdir -p /usr/share/OpenCV/haarcascades
 wget -O - https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml \
 	| sudo tee -a "/usr/share/OpenCV/haarcascades/haarcascade_frontalface_default.xml"
 ```
+
+### Camnoopy PT100
+
+gst-launch-1.0 rtspsrc location='rtsp://user:pass@x.x.x.x/onvif1' ! decodebin ! autovideosink
+
+
+### Spotify VM
+
+qemu-system-x86
+qemu-utils
+
+
+### Screensaver (kind-of)
+
+gst-launch-1.0 audiotestsrc ! audioconvert ! goom ! videoconvert ! 'video/x-raw,width=800,height=480' ! videoscale method=0 add-borders=true ! fbdevsink
