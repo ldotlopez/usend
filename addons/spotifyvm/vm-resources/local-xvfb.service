@@ -1,0 +1,9 @@
+[Unit]
+Description=Spotify box - Xvfb
+
+[Service]
+ExecStart=/usr/bin/Xvfb :10
+User=spotify
+
+[Install]
+WantedBy=multi-user.target

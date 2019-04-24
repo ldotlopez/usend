@@ -1,2 +1,5 @@
 secrets/*
 tmp/*
+*.iso
+*.qcow2
+*.raw
