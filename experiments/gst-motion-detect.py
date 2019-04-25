@@ -67,11 +67,12 @@ class Motion(Beacon):
             ! filesink location=a.jpg
         """,
 
+        # ! encodebin profile=application/ogg:video/x-theora:audio/x-vorbis \
         'encode': """
             queue name=encode-input \
-            ! encodebin profile=application/ogg:video/x-theora:audio/x-vorbis \
-            ! queue \
-            ! filesink location={output}
+            ! theoraenc \
+            ! oggmux \
+            ! filesink location={output}.ogv
         """
     }
 
@@ -97,7 +98,6 @@ class Motion(Beacon):
         src = self.pipeline.get_by_name('output')
         sink = sub_pipe.get_by_name(name + '-input')
         self.pipeline.set_state(Gst.State.PAUSED)
-        time.sleep(1)
         self.pipeline.add(sub_pipe)
         src.link(sink)
         self.pipeline.set_state(Gst.State.PLAYING)
@@ -111,11 +111,13 @@ class Motion(Beacon):
 
         sink = self.pipeline.get_by_name(name + '-input')
         src = self.pipeline.get_by_name('output')
-        src.unlink(sink)
 
+        self.pipeline.set_state(Gst.State.PAUSED)
+        src.unlink(sink)
         self.pipeline.remove(self.subpipelines[name])
         self.subpipelines[name].set_state(Gst.State.NULL)
         del(self.subpipelines[name])
+        self.pipeline.set_state(Gst.State.PLAYING)
 
     def snapshot(self):
         self.link('capture-image')
@@ -127,12 +129,6 @@ class Motion(Beacon):
         # snapshot = self.link('capture-image', start=False)
         # snapshot.get_bus().add_watch(GLib.PRIORITY_DEFAULT, on_msg, None)
         # snapshot.set_state(Gst.State.PLAYING)
-
-    def capture(self, output):
-        self.link('live', outout=output)
-
-    def uncapture(self):
-        self.unlink('live')
 
     def run(self):
         self.pipeline = self.parse(self.MAIN)
@@ -204,6 +200,7 @@ class Motion(Beacon):
             pass
 
     def on_motion_detector_message(self, params):
+        print(repr(params))
         if 'motion_begin' in params:
             ev = 'begin'
         elif 'motion_finished' in params:
@@ -246,7 +243,7 @@ class App:
 
     def on_motion_begin(self, _):
         print("Motion begin")
-        self.motion.start_capture(datetime.now().strftime('%Y.%m.%d-%H.%M.%S.ogv'))
+        self.motion.start_capture(datetime.now().strftime('%Y.%m.%d-%H.%M.%S'))
         self.motion.start_live()
 
     def on_motion_finished(self, _):
