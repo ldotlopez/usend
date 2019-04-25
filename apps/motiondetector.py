@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 
+import hkos
 import time
 from datetime import datetime
 
-import gi
+try:
+    import gi
+except ImportError:
+    import pgi as gi
+    gi.install_as_gi()
+
 gi.require_version('GLib', '2.0')
 gi.require_version('Gst', '1.0')
 
@@ -20,25 +26,7 @@ def parse_element_message(message):
     return ret
 
 
-class Beacon:
-    EVENTS = []
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._handlers = {name: set() for name in self.EVENTS}
-
-    def emit(self, name, **kwargs):
-        for (fn) in self._handlers[name]:
-            fn(self, **kwargs)
-
-    def watch(self, name, fn):
-        self._handlers[name].add(fn)
-
-    def unwatch(self, name, fn):
-        self._handlers[name].remove(fn)
-
-
-class Motion(Beacon):
+class Motion(hkos.Beacon):
     EVENTS = ['ready', 'begin', 'finished', 'eos', 'error']
 
     MAIN = """
