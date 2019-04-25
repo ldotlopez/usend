@@ -38,14 +38,10 @@ setup(
         'HouseKeeper OS'
     ),
     long_description=open('README.md').read(),
-    #install_requires=[
-    #    "piexif",
-    #    "pillow"
-    #],
-    #entry_points={
-    #    'console_scripts':
-    #        ['ocd-dt-namer=ocdutils.dtnamer:main',
-    #         'ocd-uniq-namer=ocdutils.uniqnamer:main',
-    #         'ocd-fs-janitor=ocdutils.fsjanitor:main']
-    #}
+    install_requires=open('requirements.txt').read().split('\n'),
+    entry_points={
+       'console_scripts': [
+            'usend=hkos.blocks.usend:main'
+        ]
+    }
 )
