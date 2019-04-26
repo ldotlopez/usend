@@ -62,52 +62,76 @@ class Transport(object):
         raise NotImplementedError()
 
 
-class SenderMixin(object):
-    @classmethod
-    def configure_argparser(cls, parser):
-        super(SenderMixin, cls).configure_argparser(parser)
-        parser.add_argument(
-            '-f', '--from',
-            dest='send_from',
-            required=True,
-        )
+class Cap(object):
+    NONE = 0
+    SENDER = 1
+    RECIEVER = 1 << 1
+    MESSAGE = 1 << 2
+    DETAILS = 1 << 3
+    ATTACHMENTS = 1 << 4
+    ALL = (
+        SENDER |
+        RECIEVER |
+        MESSAGE |
+        DETAILS |
+        ATTACHMENTS
+    )
+
+# class SenderMixin(object):
+#     @classmethod
+#     def configure_argparser(cls, parser):
+#         super(SenderMixin, cls).configure_argparser(parser)
+#         parser.add_argument(
+#             '-f', '--from',
+#             dest='send_from',
+#             required=True,
+#         )
 
 
-class RecieverMixin(object):
-    @classmethod
-    def configure_argparser(cls, parser):
-        super(RecieverMixin, cls).configure_argparser(parser)
-        parser.add_argument(
-            '-t', '--to',
-            dest='send_to',
-            required=True,
-        )
+# class RecieverMixin(object):
+#     @classmethod
+#     def configure_argparser(cls, parser):
+#         super(RecieverMixin, cls).configure_argparser(parser)
+#         parser.add_argument(
+#             '-t', '--to',
+#             dest='send_to',
+#             required=True,
+#         )
 
 
-class MessageMixin(object):
-    @classmethod
-    def configure_argparser(cls, parser):
-        super(MessageMixin, cls).configure_argparser(parser)
-        parser.add_argument(
-            dest='message',
-            nargs='?'
-        )
+# class MessageMixin(object):
+#     @classmethod
+#     def configure_argparser(cls, parser):
+#         super(MessageMixin, cls).configure_argparser(parser)
+#         parser.add_argument(
+#             dest='message',
+#             nargs='?'
+#         )
 
 
-class AttachmentMixin(object):
-    @classmethod
-    def configure_argparser(cls, parser):
-        super(AttachmentMixin, cls).configure_argparser(parser)
-        parser.add_argument(
-            '-a', '--attachment',
-            dest='attachments',
-            action='append'
-        )
+# class AttachmentMixin(object):
+#     @classmethod
+#     def configure_argparser(cls, parser):
+#         super(AttachmentMixin, cls).configure_argparser(parser)
+#         parser.add_argument(
+#             '-a', '--attachment',
+#             dest='attachments',
+#             action='append'
+#         )
 
 
-class SMTP(AttachmentMixin, MessageMixin, RecieverMixin, SenderMixin,
-           Transport):
+class Null(Transport):
+    NAME = 'null'
+    CAPS = Cap.ALL
+
+    def send(self, destination, message, details='', attachments=None):
+        pass
+
+
+class SMTP(Transport):
     NAME = 'smtp'
+    CAPS = (Cap.SENDER | Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS |
+            Cap.ATTACHMENTS)
 
     @classmethod
     def configure_argparser(cls, parser):
@@ -169,8 +193,10 @@ class SMTP(AttachmentMixin, MessageMixin, RecieverMixin, SenderMixin,
         smtp.close()
 
 
-class MacOSDesktop(MessageMixin, Transport):
+class MacOSDesktop(Transport):
     NAME = 'macos-desktop'
+    CAPS = Cap.MESSAGE | Cap.DETAILS
+
     SCRIPT = 'display notification "{body}" with title "{message}"'
 
     def send(self, message, body=None, attachments=None):
@@ -191,8 +217,10 @@ class MacOSDesktop(MessageMixin, Transport):
             raise SendError(msg)
 
 
-class Telegram(AttachmentMixin, MessageMixin, RecieverMixin, Transport):
+class Telegram(Transport):
     NAME = 'telegram'
+    CAPS = Cap.RECIEVER | Cap.MESSAGE | Cap.ATTACHMENTS
+
     API = 'https://api.telegram.org/bot{token}'
 
     @classmethod
@@ -258,6 +286,19 @@ class Telegram(AttachmentMixin, MessageMixin, RecieverMixin, Transport):
                 self.check_response(resp)
 
 
+def get(name, cls=Transport):
+    if getattr(cls, 'NAME', '') == name:
+        return cls
+
+    for subcls in cls.__subclasses__():
+        try:
+            return get(name, cls=subcls)
+        except TransportNotFound:
+            pass
+
+    raise TransportNotFound()
+
+
 def load_profile(config, profile):
     ret = {}
     if not config.has_section(profile):
@@ -275,6 +316,35 @@ def load_profile(config, profile):
         ret.update(load_profile(config, x))
 
     return ret
+
+
+def configure_argparser_for(parser, cls):
+    if cls.CAPS & Cap.SENDER:
+        parser.add_argument(
+            '-f', '--from',
+            dest='send_from',
+            required=True,
+        )
+
+    if cls.CAPS & Cap.RECIEVER:
+        parser.add_argument(
+            '-t', '--to',
+            dest='send_to',
+            required=True,
+        )
+
+    if cls.CAPS & Cap.MESSAGE:
+        parser.add_argument(
+            dest='message',
+            nargs='?'
+        )
+
+    if cls.CAPS & Cap.ATTACHMENTS:
+        parser.add_argument(
+            '-a', '--attachment',
+            dest='attachments',
+            action='append'
+        )
 
 
 def main():
@@ -322,7 +392,7 @@ def main():
         sys.exit(1)
 
     try:
-        transport_cls = Transport.get(transport_name)
+        transport_cls = get(transport_name)
     except TransportNotFound:
         msg = "Transport '{transport}' not found"
         print(msg.format(transport=transport_name))
@@ -336,6 +406,8 @@ def main():
     remaining = profile_argv + remaining
 
     # Parse remaining command line with transport parser
+    # transport_cls.configure_argparser(parser)
+    configure_argparser_for(parser, transport_cls)
     transport_cls.configure_argparser(parser)
     args = parser.parse_args(remaining)
 
