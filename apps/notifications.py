@@ -1,23 +1,13 @@
-import hkos
 from hkos.blocks import (
     kvrouter,
     usend
 )
-
-import collections
+from hkos.utils import (
+    underscore_dict_keys,
+    load_config_file
+)
 import functools
 import sys
-
-
-def underscore_dict_keys(d, recurse=True):
-    ret = {}
-    for (k, v) in d.items():
-        k = k.replace('-', '_')
-        if isinstance(v, dict) and recurse:
-            v = underscore_dict_keys(v, recurse=True)
-        ret[k] = v
-
-    return ret
 
 
 def send_wrapper(send_fn, **default_kwargs):
@@ -44,7 +34,7 @@ class App:
 
     @staticmethod
     def get_config():
-        cp = hkos.load_config_file('notifications')
+        cp = load_config_file('notifications')
 
         # Load routes
         routes = {'*': 'null'}
@@ -77,8 +67,32 @@ class App:
 
 
 def main():
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--id',
+        dest='sender_id',
+        required=True,
+    )
+    parser.add_argument(
+        '--details',
+        dest='details'
+    )
+    parser.add_argument(
+        '-a', '--attachment',
+        dest='attachments',
+        action='append'
+    )
+    parser.add_argument(
+        dest='message',
+    )
+    args = parser.parse_args(sys.argv[1:])
+
     app = App()
-    app.notify('motiondetector.cam0.motion', 'hola')
+    app.notify(args.sender_id, args.message,
+               details=args.details,
+               attachments=args.attachments)
 
 
 if __name__ == '__main__':

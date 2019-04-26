@@ -94,7 +94,8 @@ class Null(Transport):
     NAME = 'null'
     CAPS = Cap.ALL
 
-    def send(self, destination, message, details='', attachments=None):
+    def send(self, destination=None, message=None, details=None,
+             attachments=None):
         pass
 
 
