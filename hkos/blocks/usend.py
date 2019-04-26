@@ -176,7 +176,7 @@ class SMTP(Transport):
             msg.attach(part)
 
         smtp = smtplib.SMTP(self.host, port=self.port)
-        smtp.sendmail(send_from, send_to, msg.as_string())
+        smtp.sendmail(self.sender, destination, msg.as_string())
         smtp.close()
 
 
@@ -248,7 +248,7 @@ class Telegram(Transport):
 
         return resp['result']
 
-    def send(self, destination, message=None, details=None, attachments=None):
+    def send(self, destination, message, details=None, attachments=None):
         try:
             destination = int(destination)
         except ValueError:
@@ -266,6 +266,9 @@ class Telegram(Transport):
                           "(try sending /start to the bot)")
                 errmsg = errmsg.format(username=destination)
                 raise raise_from(SendError(errmsg), e)
+
+        if not attachments:
+            attachments = []
 
         tg_data = {
             'chat_id': destination,
@@ -308,6 +311,36 @@ class Telegram(Transport):
             self.check_response(resp)
 
 
+def build_transport(cls_or_name, params):
+    if isinstance(cls_or_name, str):
+        cls = transport_for_name(cls_or_name)
+    elif isinstance(cls_or_name, Transport):
+        cls = cls_or_name
+    elif cls_or_name is None:
+        cls = transport_for_name(params.pop('backend'))
+    else:
+        raise TypeError(cls_or_name,
+                        'Transport class, string or None required')
+
+    if not isinstance(params, dict):
+        raise TypeError(params, 'dict required')
+
+    # Extract Transport.__init__ params
+    init_params = {}
+    remaining = {}
+
+    for (k, v) in params.items():
+        if k.startswith(cls.NAME + '_'):
+            k = k[len(cls.NAME) + 1:]
+            init_params[k] = v
+        else:
+            remaining[k] = v
+
+    transport = cls(**init_params)
+
+    return transport, remaining
+
+
 def transport_for_name(name, cls=Transport):
     if getattr(cls, 'NAME', '') == name:
         return cls
@@ -327,7 +360,7 @@ def load_profile(config, profile_name):
     """
     ret = {}
     if not config.has_section(profile_name):
-        raise KeyError(profile)
+        raise KeyError(profile_name)
 
     for (name, value) in config.items(profile_name):
         ret[name] = value
@@ -442,24 +475,16 @@ def main():
         print("Transport param is required", file=sys.stderr)
         sys.exit(1)
 
+    # Rebuild parser
     transport_cls = transport_for_name(transport_name)
     transport_cls.configure_argparser(parser)
 
-    args = parser.parse_args(sys.argv[1:])
+    # Cleanup params
+    params = vars(parser.parse_args(sys.argv[1:]))
+    for k in ['config_file', 'profile_name', 'transport_name']:
+        params.pop(k, None)
 
-    # Split into init and send params
-    init_params = {}
-    send_params = {}
-    for (name, value) in vars(args).items():
-        if name in ('transport_name', 'profile_name', 'config_file'):
-            pass
-        elif name.startswith(transport_name + '_'):
-            real_name = name[len(transport_name) + 1:]
-            init_params[real_name] = value
-        else:
-            send_params[name] = value
-
-    transport = transport_cls(**init_params)
+    transport, send_params = build_transport(transport_name, params)
     try:
         transport.send(**send_params)
     except SendError as e:
