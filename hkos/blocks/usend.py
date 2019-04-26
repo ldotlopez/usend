@@ -8,7 +8,6 @@ from six.moves import configparser
 
 # stdlib
 import argparse
-import json
 import os.path
 import re
 import subprocess
@@ -428,7 +427,7 @@ def load_config_files(config_files):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
         '--transport',
         default='',
@@ -446,7 +445,11 @@ def main():
         dest='profile_name',
         default='',
     )
-
+    parser.add_argument(
+        '--help',
+        dest='help',
+        action='store_true'
+    )
     args, remaining = parser.parse_known_args(sys.argv[1:])
 
     # Read config
@@ -472,6 +475,7 @@ def main():
         or ''
     )
     if not transport_name:
+        parser.print_help()
         print("Transport param is required", file=sys.stderr)
         sys.exit(1)
 
@@ -480,7 +484,12 @@ def main():
     transport_cls.configure_argparser(parser)
 
     # Cleanup params
-    params = vars(parser.parse_args(sys.argv[1:]))
+    args = parser.parse_args(sys.argv[1:])
+    if args.help:
+        parser.print_help()
+        sys.exit(1)
+
+    params = vars(args)
     for k in ['config_file', 'profile_name', 'transport_name']:
         params.pop(k, None)
 
