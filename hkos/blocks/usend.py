@@ -368,15 +368,20 @@ def main():
 
     # TODO: Parse config file from command line
     config = configparser.ConfigParser()
-    configfile = os.path.expanduser('~/.usend.ini')
-    try:
-        with open(configfile, 'r', encoding='utf-8') as fh:
-            config.read_file(fh)
+    configfiles = [
+        os.path.expanduser('~/.config/usend.ini'),
+        os.path.expanduser('~/.usend.ini')
+    ]
+    for configfile in configfiles:
+        try:
+            with open(configfile, 'r', encoding='utf-8') as fh:
+                config.read_file(fh)
+            break
 
-    except OSError as e:
-        errmsg = "Can't read configfile '{filepath}': {msg}"
-        errmsg = errmsg.format(filepath=configfile, msg=str(e))
-        print(errmsg, file=sys.stderr)
+        except OSError as e:
+            errmsg = "Can't read configfile '{filepath}': {msg}"
+            errmsg = errmsg.format(filepath=configfile, msg=str(e))
+            print(errmsg, file=sys.stderr)
 
     # Initial argument parsing
     args, remaining = parser.parse_known_args(sys.argv[1:])
