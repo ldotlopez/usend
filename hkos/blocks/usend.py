@@ -41,83 +41,54 @@ class SendError(Exception):
 
 
 class Transport(object):
-    # @classmethod
-    # def get(cls, name):
-    #     for subcls in cls.__subclasses__():
-    #         try:
-    #             return subcls.get(name)
-    #         except TransportNotFound:
-    #             pass
-
-    #     if getattr(cls, 'NAME', '') == name:
-    #         return cls
-
-    #     raise TransportNotFound()
-
     @classmethod
     def configure_argparser(cls, parser):
-        pass
+        """
+        Support for command line application
+        """
+        if cls.CAPS & Cap.RECIEVER:
+            parser.add_argument(
+                '-t', '--to',
+                dest='destination',
+                required=True,
+            )
 
-    def send(self, send_to, message, body=None, attachments=None):
+        if cls.CAPS & Cap.ATTACHMENTS:
+            parser.add_argument(
+                '-a', '--attachment',
+                dest='attachments',
+                action='append'
+            )
+
+        if cls.CAPS & Cap.DETAILS:
+            parser.add_argument(
+                '--details',
+                dest='details',
+                nargs='?'
+            )
+
+        if cls.CAPS & Cap.MESSAGE:
+            parser.add_argument(
+                dest='message',
+                nargs='?'
+            )
+
+    def send(self, to=None, message=None, details=None, attachments=None):
         raise NotImplementedError()
 
 
 class Cap(object):
     NONE = 0
-    SENDER = 1
     RECIEVER = 1 << 1
     MESSAGE = 1 << 2
     DETAILS = 1 << 3
     ATTACHMENTS = 1 << 4
     ALL = (
-        SENDER |
         RECIEVER |
         MESSAGE |
         DETAILS |
         ATTACHMENTS
     )
-
-# class SenderMixin(object):
-#     @classmethod
-#     def configure_argparser(cls, parser):
-#         super(SenderMixin, cls).configure_argparser(parser)
-#         parser.add_argument(
-#             '-f', '--from',
-#             dest='send_from',
-#             required=True,
-#         )
-
-
-# class RecieverMixin(object):
-#     @classmethod
-#     def configure_argparser(cls, parser):
-#         super(RecieverMixin, cls).configure_argparser(parser)
-#         parser.add_argument(
-#             '-t', '--to',
-#             dest='send_to',
-#             required=True,
-#         )
-
-
-# class MessageMixin(object):
-#     @classmethod
-#     def configure_argparser(cls, parser):
-#         super(MessageMixin, cls).configure_argparser(parser)
-#         parser.add_argument(
-#             dest='message',
-#             nargs='?'
-#         )
-
-
-# class AttachmentMixin(object):
-#     @classmethod
-#     def configure_argparser(cls, parser):
-#         super(AttachmentMixin, cls).configure_argparser(parser)
-#         parser.add_argument(
-#             '-a', '--attachment',
-#             dest='attachments',
-#             action='append'
-#         )
 
 
 class Null(Transport):
@@ -130,12 +101,10 @@ class Null(Transport):
 
 class SMTP(Transport):
     NAME = 'smtp'
-    CAPS = (Cap.SENDER | Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS |
-            Cap.ATTACHMENTS)
+    CAPS = (Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS | Cap.ATTACHMENTS)
 
     @classmethod
     def configure_argparser(cls, parser):
-        super(SMTP, cls).configure_argparser(parser)
         parser.add_argument(
             '--smtp-host',
             default='127.0.0.1'
@@ -143,11 +112,26 @@ class SMTP(Transport):
         parser.add_argument(
             '--smtp-port',
             default=25,
-            type=int)
+            type=int
+        )
+        parser.add_argument(
+            '--smtp-sender',
+            type=str,
+            required=True
+        )
+        super(SMTP, cls).configure_argparser(parser)
 
-    def __init__(self, host='127.0.0.1', port=25):
+    def __init__(self, sender, host='127.0.0.1', port=25):
         self.host = str(host)
         self.port = int(port)
+
+        # check sender
+        try:
+            self.sender = str(sender)
+        except ValueError as e:
+            raise_from(ValueError(sender, 'not a valid email'), e)
+        if not check_is_email(self.sender):
+            raise ValueError(self.sender, 'not a valid email')
 
         # Check port
         try:
@@ -157,25 +141,26 @@ class SMTP(Transport):
         if self.port < 1:
             raise ValueError(port, 'invalid port')
 
-    def send(self, send_from, send_to, message, subject='', attachments=None):
-        # check send_from
-        if not check_is_email(send_from):
-            raise ValueError(send_from, 'not a valid email')
-
-        # check send_to
-        if not isinstance(send_to, list):
-            send_to = [send_to]
-        if not all([check_is_email(x) for x in send_to]):
-            raise ValueError(send_to, 'not a list of valid emails')
+    def send(self, destination, message=None, details=None, attachments=None):
+        # check destination
+        if not check_is_email(destination):
+            raise ValueError(destination, 'not a valid email')
 
         # Check message
         message = str(message)
         if not message:
             raise ValueError(message, 'empty message')
 
+        if not message and not details:
+            raise ValueError((message, details), 'message or details required')
+
+        if not details:
+            message, details = ("Notification from HkOS", message)
+
         msg = email.mime.multipart.MIMEMultipart()
-        msg['From'] = send_from
-        msg['To'] = email.utils.COMMASPACE.join(send_to)
+        msg['From'] = self.sender
+        # msg['To'] = email.utils.COMMASPACE.join(send_to)
+        msg['To'] = destination
         msg['Date'] = email.utils.formatdate(localtime=True)
         msg['Subject'] = subject
         msg.attach(email.mime.text.MIMEText(message))
@@ -201,9 +186,13 @@ class MacOSDesktop(Transport):
 
     SCRIPT = 'display notification "{body}" with title "{message}"'
 
-    def send(self, message, body=None, attachments=None):
+    def send(self, destination=None, message=None, details=None,
+             attachments=None):
+        if not message and not details:
+            raise ValueError((message, details), 'message or details required')
+
         script = self.SCRIPT
-        script = script.format(message=message, body=body or '')
+        script = script.format(message=message, body=details or '')
         cmdl = ['/usr/bin/osascript', '-e', script]
 
         try:
@@ -220,18 +209,23 @@ class MacOSDesktop(Transport):
 
 
 class Telegram(Transport):
-    NAME = 'telegram'
-    CAPS = Cap.RECIEVER | Cap.MESSAGE | Cap.ATTACHMENTS
+    """
+    Telegram backend.
+    Docs: https://core.telegram.org/bots/api
+    """
 
-    API = 'https://api.telegram.org/bot{token}'
+    NAME = 'telegram'
+    CAPS = Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS | Cap.ATTACHMENTS
+
+    BASE_API_URL = 'https://api.telegram.org/bot{token}'
 
     @classmethod
     def configure_argparser(self, parser):
-        super(Telegram, self).configure_argparser(parser)
         parser.add_argument(
             '--telegram-token',
             required=True
         )
+        super(Telegram, self).configure_argparser(parser)
 
     def __init__(self, token):
         token = str(token)
@@ -239,7 +233,7 @@ class Telegram(Transport):
             msg = 'Missing telegram token'
             raise ValueError(msg)
 
-        self.API = self.API.format(token=token)
+        self.BASE_API_URL = self.BASE_API_URL.format(token=token)
 
     def check_response(self, resp):
         if resp.status_code != 200:
@@ -254,11 +248,11 @@ class Telegram(Transport):
 
         return resp['result']
 
-    def send(self, send_to, message, attachments=None):
+    def send(self, destination, message=None, details=None, attachments=None):
         try:
-            send_to = int(send_to)
+            destination = int(destination)
         except ValueError:
-            url = self.API + '/getUpdates'
+            url = self.BASE_API_URL + '/getUpdates'
             resp = requests.get(url)
             resp = self.check_response(resp)
             tbl = {
@@ -266,56 +260,80 @@ class Telegram(Transport):
                 for x in resp if 'message' in x and 'chat' in x['message']
             }
             try:
-                send_to = tbl[send_to]
+                destination = tbl[destination]
             except KeyError as e:
                 errmsg = ("user {username} not found. "
                           "(try sending /start to the bot)")
-                errmsg = errmsg.format(username=send_to)
+                errmsg = errmsg.format(username=destination)
                 raise raise_from(SendError(errmsg), e)
 
-        caption = None
-        if attachments and message and len(message) <= 1024:
-            message, caption = None, message
+        tg_data = {
+            'chat_id': destination,
+            'text': message,
+            'parse_mode': None,
+            'caption': None
+        }
 
-        if message:
-            url = self.API + '/sendMessage'
-            data = {'chat_id': send_to, 'text': message}
-            resp = requests.get(url, data=data)
+        # Merge message and details
+        if details:
+            message = "*{message}*\n{details}".format(
+                message=message,
+                details=details)
+            parse_mode = 'markdown'
+        else:
+            parse_mode = None
+
+        if (not attachments or
+                (len(attachments) == 1 and len(message) > 1024) or
+                len(attachments) > 1):
+            tg_data = {
+                'chat_id': destination,
+                'text': message,
+                'parse_mode': parse_mode
+            }
+            url = self.BASE_API_URL + '/sendMessage'
+            resp = requests.get(url, data=tg_data)
+            self.check_response(resp)
+            message = None
+
+        tg_data = {
+            'chat_id': destination,
+            'caption': message,
+            'parse_mode': parse_mode
+        }
+        for filepath in attachments:
+            files = {'document': open(filepath, 'rb')}
+            url = self.BASE_API_URL + '/sendDocument'
+            resp = requests.post(url, data=tg_data, files=files)
             self.check_response(resp)
 
-        if attachments:
-            url = self.API + '/sendDocument'
-            data = {'chat_id': send_to, 'caption': caption}
 
-            for filepath in attachments:
-                files = {'document': open(filepath, 'rb')}
-                resp = requests.post(url, data=data, files=files)
-                self.check_response(resp)
-
-
-def get(name, cls=Transport):
+def transport_for_name(name, cls=Transport):
     if getattr(cls, 'NAME', '') == name:
         return cls
 
     for subcls in cls.__subclasses__():
         try:
-            return get(name, cls=subcls)
+            return transport_for_name(name, cls=subcls)
         except TransportNotFound:
             pass
 
     raise TransportNotFound()
 
 
-def load_profile(config, profile):
+def load_profile(config, profile_name):
+    """
+    FIXME: generalize and move to core module
+    """
     ret = {}
-    if not config.has_section(profile):
+    if not config.has_section(profile_name):
         raise KeyError(profile)
 
-    for (name, value) in config.items(profile):
+    for (name, value) in config.items(profile_name):
         ret[name] = value
 
     try:
-        includes = re.split(r"[\s,]+", ret.pop('include'))
+        includes = re.split(r"[\s,]+", ret.pop('!include'))
     except KeyError:
         return ret
 
@@ -325,14 +343,13 @@ def load_profile(config, profile):
     return ret
 
 
-def configure_argparser_for(parser, cls):
-    if cls.CAPS & Cap.SENDER:
-        parser.add_argument(
-            '-f', '--from',
-            dest='send_from',
-            required=True,
-        )
-
+def configure_argparser_for_transport(parser, cls):
+    # if cls.CAPS & Cap.SENDER:
+    #     parser.add_argument(
+    #         '-f', '--from',
+    #         dest='send_from',
+    #         required=True,
+    #     )
     if cls.CAPS & Cap.RECIEVER:
         parser.add_argument(
             '-t', '--to',
@@ -346,6 +363,12 @@ def configure_argparser_for(parser, cls):
             nargs='?'
         )
 
+    if cls.CAPS & Cap.DETAILS:
+        parser.add_argument(
+            dest='details',
+            nargs='?'
+        )
+
     if cls.CAPS & Cap.ATTACHMENTS:
         parser.add_argument(
             '-a', '--attachment',
@@ -354,80 +377,81 @@ def configure_argparser_for(parser, cls):
         )
 
 
+def load_config_files(config_files):
+    config = configparser.ConfigParser()
+
+    for config_file in config_files:
+        try:
+            with open(config_file, 'r', encoding='utf-8') as fh:
+                config.read_file(fh)
+            break
+
+        except OSError as e:
+            errmsg = "Can't read config file '{filepath}': {msg}"
+            errmsg = errmsg.format(filepath=config_file, msg=str(e))
+            print(errmsg, file=sys.stderr)
+
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--transport',
         default='',
+        dest='transport_name',
         help='Transport to use.'
     )
     parser.add_argument(
+        '-c', '--conf',
+        default='',
+        dest='config_file',
+        help='Use config file.'
+    )
+    parser.add_argument(
         '--profile',
+        dest='profile_name',
         default='',
     )
 
-    # TODO: Parse config file from command line
-    config = configparser.ConfigParser()
-    configfiles = [
+    args, remaining = parser.parse_known_args(sys.argv[1:])
+
+    # Read config
+    default_config_files = [
         os.path.expanduser('~/.config/usend.ini'),
         os.path.expanduser('~/.usend.ini')
     ]
-    for configfile in configfiles:
-        try:
-            with open(configfile, 'r', encoding='utf-8') as fh:
-                config.read_file(fh)
-            break
-
-        except OSError as e:
-            errmsg = "Can't read configfile '{filepath}': {msg}"
-            errmsg = errmsg.format(filepath=configfile, msg=str(e))
-            print(errmsg, file=sys.stderr)
-
-    # Initial argument parsing
-    args, remaining = parser.parse_known_args(sys.argv[1:])
-
-    # If profile it's specified we load it and integrate its values as
-    # arguments
-    if args.profile:
-        profile_items = load_profile(config, args.profile)
+    if args.config_file:
+        config = load_config_files([args.config_file])
     else:
-        profile_items = {}
+        config = load_config_files(default_config_files)
 
-    # Check which transport to use (pop from profile_items)
+    # Load profile if defined
+    if args.profile_name:
+        profile = load_profile(config, args.profile_name)
+    else:
+        profile = {}
+
+    # Get transport
     transport_name = (
-        args.transport or
-        profile_items.get('transport', None)
+        args.transport_name or
+        profile.get('transport', None)
         or ''
     )
     if not transport_name:
         print("Transport param is required", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        transport_cls = get(transport_name)
-    except TransportNotFound:
-        msg = "Transport '{transport}' not found"
-        print(msg.format(transport=transport_name))
-        sys.exit(1)
-
-    # Integrate profile items into remaining args
-    profile_argv = []
-    profile_items.pop('transport', None)
-    for (name, value) in profile_items.items():
-        profile_argv.extend(['--' + name.replace('_', '-'), value])
-    remaining = profile_argv + remaining
-
-    # Parse remaining command line with transport parser
-    # transport_cls.configure_argparser(parser)
-    configure_argparser_for(parser, transport_cls)
+    transport_cls = transport_for_name(transport_name)
     transport_cls.configure_argparser(parser)
-    args = parser.parse_args(remaining)
+
+    args = parser.parse_args(sys.argv[1:])
 
     # Split into init and send params
     init_params = {}
     send_params = {}
     for (name, value) in vars(args).items():
-        if name in ('transport', 'profile'):
+        if name in ('transport_name', 'profile_name', 'config_file'):
             pass
         elif name.startswith(transport_name + '_'):
             real_name = name[len(transport_name) + 1:]
@@ -436,7 +460,6 @@ def main():
             send_params[name] = value
 
     transport = transport_cls(**init_params)
-
     try:
         transport.send(**send_params)
     except SendError as e:
