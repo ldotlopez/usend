@@ -41,18 +41,18 @@ class SendError(Exception):
 
 
 class Transport(object):
-    @classmethod
-    def get(cls, name):
-        for subcls in cls.__subclasses__():
-            try:
-                return subcls.get(name)
-            except TransportNotFound:
-                pass
+    # @classmethod
+    # def get(cls, name):
+    #     for subcls in cls.__subclasses__():
+    #         try:
+    #             return subcls.get(name)
+    #         except TransportNotFound:
+    #             pass
 
-        if getattr(cls, 'NAME', '') == name:
-            return cls
+    #     if getattr(cls, 'NAME', '') == name:
+    #         return cls
 
-        raise TransportNotFound()
+    #     raise TransportNotFound()
 
     @classmethod
     def configure_argparser(cls, parser):
@@ -147,6 +147,8 @@ class SMTP(Transport):
 
     def __init__(self, host='127.0.0.1', port=25):
         self.host = str(host)
+        self.port = int(port)
+
         # Check port
         try:
             self.port = int(port)
@@ -232,6 +234,7 @@ class Telegram(Transport):
         )
 
     def __init__(self, token):
+        token = str(token)
         if not token:
             msg = 'Missing telegram token'
             raise ValueError(msg)
