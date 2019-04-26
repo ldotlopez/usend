@@ -273,6 +273,10 @@ class Telegram(Transport):
                 errmsg = errmsg.format(username=send_to)
                 raise raise_from(SendError(errmsg), e)
 
+        caption = None
+        if attachments and message and len(message) <= 1024:
+            message, caption = None, message
+
         if message:
             url = self.API + '/sendMessage'
             data = {'chat_id': send_to, 'text': message}
@@ -281,7 +285,7 @@ class Telegram(Transport):
 
         if attachments:
             url = self.API + '/sendDocument'
-            data = {'chat_id': send_to}
+            data = {'chat_id': send_to, 'caption': caption}
 
             for filepath in attachments:
                 files = {'document': open(filepath, 'rb')}
