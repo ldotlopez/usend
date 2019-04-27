@@ -27,6 +27,18 @@ import email.utils
 import smtplib
 
 
+# Native linux
+if sys.platform == 'linux':
+    try:
+        import gi
+    except ImportError:
+        import pgi as gi
+        gi.install_as_gi()
+
+    gi.require_version('Notify', '0.7')  # noqa
+    from gi.repository import Notify
+
+
 def check_is_email(s):
     return re.search(r'(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)', s)
 
@@ -178,6 +190,21 @@ class SMTP(Transport):
         smtp = smtplib.SMTP(self.host, port=self.port)
         smtp.sendmail(self.sender, destination, msg.as_string())
         smtp.close()
+
+
+class FreeDesktop(Transport):
+    NAME = 'freedesktop'
+    CAPS = Cap.MESSAGE | Cap.DETAILS
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not Notify.is_initted():
+            Notify.init(sys.argv[0])
+
+    def send(self, destination=None, message=None, details=None,
+             attachments=None):
+        ntfy = Notify.Notification(summary=message, body=details)
+        ntfy.show()
 
 
 class MacOSDesktop(Transport):
@@ -491,7 +518,7 @@ def main():
         sys.exit(1)
 
     params = vars(args)
-    for k in ['config_file', 'profile_name', 'transport_name']:
+    for k in ['config_file', 'profile_name', 'transport_name', 'help']:
         params.pop(k, None)
 
     transport, send_params = build_transport(transport_name, params)
