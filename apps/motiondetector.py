@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 
-import hkos
+
+from hkos.blocks.beacon import Beacon
+
+
+import contextlib
 import time
 from datetime import datetime
+
 
 try:
     import gi
 except ImportError:
     import pgi as gi
     gi.install_as_gi()
-
 gi.require_version('GLib', '2.0')
 gi.require_version('Gst', '1.0')
+
 
 from gi.repository import (  # noqa
     GLib,
@@ -22,52 +27,64 @@ from gi.repository import (  # noqa
 def parse_element_message(message):
     struct = message.get_structure()
     fields = [struct.nth_field_name(idx) for idx in range(struct.n_fields())]
-    ret = {name: struct.get_value(name) for name in fields}
+    try:
+        ret = {name: struct.get_value(name) for name in fields}
+    except TypeError:
+        return {}
+
     return ret
 
 
-class Motion(hkos.Beacon):
+class Motion(Beacon):
     EVENTS = ['ready', 'begin', 'finished', 'eos', 'error']
 
     MAIN = """
-        v4l2src \
-        ! image/jpeg,width=1280,height=720 \
+        {src} \
         ! decodebin \
-        ! videoconvert \
+        ! video/x-raw ! videoconvert \
         ! tee name=output \
-        ! videoscale \
-        ! video/x-raw,width=160,height=120 \
-        ! videoconvert \
-        ! motioncells name=motion-detector gap=1 \
-        ! queue \
-        ! fakesink
+        output. \
+            ! queue \
+            ! videoconvert \
+            ! videoscale ! video/x-raw,width=160,height=120 \
+            ! videoconvert \
+            ! motioncells name=motion-detector gap={motion_gap} \
+            ! videoconvert \
+            ! queue \
+            ! fakesink
     """
 
     SUB_PIPES = {
         'live': """
             queue name=live-input \
-            ! xvimagesink async=true
+            ! videoconvert \
+            ! queue \
+            ! xvimagesink
         """,
 
         'snapshot': """
-            queue name=capture-image-input \
-            ! jpegenc snapshot=true \
+            queue name=snapshot-input \
+            ! jpegenc name=snapshot-encoder \
             ! filesink location=a.jpg
         """,
 
-        # ! encodebin profile=application/ogg:video/x-theora:audio/x-vorbis \
         'encode': """
             queue name=encode-input \
-            ! theoraenc \
-            ! oggmux \
-            ! filesink location={output}.ogv
+            ! videoconvert \
+            ! x264enc \
+            ! mp4mux fragment-duration=200 \
+            ! queue \
+            ! filesink async=false location={encode_output}.mp4
         """
     }
 
-    def __init__(self):
+    def __init__(self, src='v4l2src device=/dev/video0', gap=3):
         super().__init__()
+        self.MAIN = self.MAIN.format(
+            src=src.strip().strip('!'),
+            motion_gap=gap)
+
         self.subpipelines = {}
-        self._event_counter = 0
 
     def parse(self, desc, *args, **kwargs):
         try:
@@ -75,6 +92,25 @@ class Motion(hkos.Beacon):
         except GLib.Error as e:
             print(repr(e))
             raise
+
+    @contextlib.contextmanager
+    def pause(self):
+        def check_state(e, state):
+            ret_type, state, pending = e.get_state(Gst.CLOCK_TIME_NONE)
+            if pending != Gst.State.VOID_PENDING:
+                raise SystemError()
+            if state != state:
+                raise SystemError()
+
+        e = self.pipeline
+
+        e.set_state(Gst.State.PAUSED)
+        check_state(e, Gst.State.PAUSED)
+
+        yield self.pipeline
+
+        e.set_state(Gst.State.PLAYING)
+        check_state(e, Gst.State.PLAYING)
 
     def link(self, name, **params):
         description = self.SUB_PIPES[name].strip()
@@ -85,10 +121,10 @@ class Motion(hkos.Beacon):
         sub_pipe.name = name + '-pipeline'
         src = self.pipeline.get_by_name('output')
         sink = sub_pipe.get_by_name(name + '-input')
-        self.pipeline.set_state(Gst.State.PAUSED)
-        self.pipeline.add(sub_pipe)
-        src.link(sink)
-        self.pipeline.set_state(Gst.State.PLAYING)
+
+        with self.pause():
+            self.pipeline.add(sub_pipe)
+            src.link(sink)
 
         self.subpipelines[name] = sub_pipe
         return sub_pipe
@@ -97,26 +133,15 @@ class Motion(hkos.Beacon):
         if name not in self.subpipelines:
             return
 
-        sink = self.pipeline.get_by_name(name + '-input')
         src = self.pipeline.get_by_name('output')
+        sink = self.pipeline.get_by_name(name + '-input')
 
-        self.pipeline.set_state(Gst.State.PAUSED)
-        src.unlink(sink)
-        self.pipeline.remove(self.subpipelines[name])
+        with self.pause():
+            src.unlink(sink)
+            self.pipeline.remove(self.subpipelines[name])
+
         self.subpipelines[name].set_state(Gst.State.NULL)
         del(self.subpipelines[name])
-        self.pipeline.set_state(Gst.State.PLAYING)
-
-    def snapshot(self):
-        self.link('capture-image')
-
-        # def on_msg(bus, msg):
-        #     print("snapshot bus:", msg.type)
-        #     return True
-
-        # snapshot = self.link('capture-image', start=False)
-        # snapshot.get_bus().add_watch(GLib.PRIORITY_DEFAULT, on_msg, None)
-        # snapshot.set_state(Gst.State.PLAYING)
 
     def run(self):
         self.pipeline = self.parse(self.MAIN)
@@ -126,6 +151,7 @@ class Motion(hkos.Beacon):
         bus.add_signal_watch()
         bus.connect("message", self.on_bus_message)
 
+        self._start_time = time.monotonic()
         self.pipeline.set_state(Gst.State.PLAYING)
 
     def stop(self):
@@ -139,12 +165,55 @@ class Motion(hkos.Beacon):
         self.unlink('live')
 
     def start_capture(self, output):
-        self.link('encode', output=output)
+        self.link('encode', encode_output=output)
 
     def stop_capture(self):
         self.unlink('encode')
 
-    def on_bus_message(self, bus, message):
+    def snapshot(self):
+        el = None
+        pad = None
+        signal_id = 0
+        probe_id = 0
+        done = False
+
+        def _on_pad_added(src, pad):
+            pad.add_probe(Gst.PadProbeType.BUFFER, _pad_probe)
+
+        def _pad_probe(pad, info):
+            nonlocal done
+            if not done:
+                print("Probe called")
+                done = True
+                GLib.idle_add(_finalize_snapshot)
+                return Gst.PadProbeReturn.PASS
+            else:
+                print("Drop")
+                return Gst.PadProbeReturn.DROP
+
+        def _finalize_snapshot():
+            print("Finalize called")
+            nonlocal pad
+            nonlocal probe_id
+            nonlocal signal_id
+
+            if probe_id:
+                pad.remove_probe(probe_id)
+                probe_id = 0
+
+            if signal_id:
+                el.disconnect(signal_id)
+                signal_id = 0
+
+            self.unlink('snapshot')
+            return False
+
+        el = self.pipeline.get_by_name('output')
+        signal_id = el.connect('pad-added', _on_pad_added)
+        self.link('snapshot')
+
+    def debug_message(self, message):
+        return
         ignore_types = [
             Gst.MessageType.ASYNC_DONE,
             Gst.MessageType.NEW_CLOCK,
@@ -155,14 +224,19 @@ class Motion(hkos.Beacon):
         if message.type in ignore_types:
             return
 
-        # msg = "[MSG] {name}\t{type}"
-        # msg = msg.format(name=message.src.name,
-        #                  type=str(message.type.first_value_name))
-        # print(msg)
+        msg = "[MSG] {name}\t{type}"
+        msg = msg.format(name=message.src.name,
+                         type=str(message.type.first_value_name))
+        print(msg)
 
-        # if message.type == Gst.MessageType.STATE_CHANGED:
-        #     old, new, pending = message.parse_state_changed()
-        #     print("({}) {} -> {}".format(pending, old, new))
+        if message.type == Gst.MessageType.STATE_CHANGED:
+            old, new, pending = message.parse_state_changed()
+            print("({}) {} -> {}".format(pending, old, new))
+
+    def on_bus_message(self, bus, message):
+        self.debug_message(message)
+        if message.src.name == 'snapshot-encoder' or message.src == self.subpipelines.get('snapshot'):
+            self.debug_message(message)
 
         if message.type == Gst.MessageType.ELEMENT:
             msgparams = parse_element_message(message)
@@ -173,7 +247,6 @@ class Motion(hkos.Beacon):
                 self.on_motion_detector_message(msgparams)
 
             else:
-                # Handle messages from other elements
                 pass
 
         elif message.type == Gst.MessageType.EOS:
@@ -188,7 +261,6 @@ class Motion(hkos.Beacon):
             pass
 
     def on_motion_detector_message(self, params):
-        print(repr(params))
         if 'motion_begin' in params:
             ev = 'begin'
         elif 'motion_finished' in params:
@@ -196,21 +268,19 @@ class Motion(hkos.Beacon):
         else:
             raise NotImplementedError()
 
-        self._event_counter = self._event_counter + 1
-
-        if self._event_counter == 2:
-            self.emit('ready')
-
-        if self._event_counter < 3:
-            return
-
         self.emit(ev)
 
 
 class App:
     def __init__(self):
         self.loop = GLib.MainLoop()
-        self.motion = Motion()
+        self.motion = Motion(
+            # src=("v4l2src device=/dev/video2 "
+            #      "! image/jpeg,width=1280,height=720"),
+            # src=("rtspsrc "
+            #      "location=rtsp://admin:xxx@192.168.1.137/onvif1"),
+            gap=3
+        )
         self.motion.watch('ready', lambda x: print("Ready"))
         self.motion.watch('begin', self.on_motion_begin)
         self.motion.watch('finished', self.on_motion_finished)
@@ -231,6 +301,7 @@ class App:
 
     def on_motion_begin(self, _):
         print("Motion begin")
+        # self.motion.snapshot()
         self.motion.start_capture(datetime.now().strftime('%Y.%m.%d-%H.%M.%S'))
         self.motion.start_live()
 
@@ -243,7 +314,7 @@ class App:
         self.quit()
 
     def on_error(self, _, gerror, strerror):
-        print(gerror.message)
+        print("Error:", gerror.message)
 
 
 if __name__ == '__main__':
