@@ -1,0 +1,26 @@
+{
+    "folders":
+    [
+        {
+            "follow_symlinks": true,
+            "path": ".",
+            "file_exclude_patterns": ["*.pyc", ".*"],
+            "folder_exclude_patterns": ["env", "__pycache__"]
+        }
+    ],
+    "SublimeLinter":
+    {
+        "@python": 2.7,
+        "linters":
+        {
+            "flake8":
+            {
+                "@disable": false,
+            },
+            "pep8":
+            {
+                "@disable": true,
+            }
+        }
+    }
+}
