@@ -8,3 +8,9 @@ HKOS_CONFIG_DIR="${HKOS_CONFIG_DIR:-$HKOS_HOME/config}"
 export PYTHONPATH=$HKOS_HOME
 export HKOS_HOME
 export HKOS_CONFIG_DIR
+
+if [[ "${BASH_SOURCE[0]}" = "${0}" ]]
+then
+	APP="$1"; shift
+	exec ${PYTHONBIN:-python3} "$HKOS_HOME/apps/${APP}.py" $*
+fi
