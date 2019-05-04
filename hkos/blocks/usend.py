@@ -26,6 +26,9 @@ import email.mime.text
 import email.utils
 import smtplib
 
+# PushBullet
+import pushbullet
+
 
 # Native linux
 if sys.platform == 'linux':
@@ -336,6 +339,64 @@ class Telegram(Transport):
             url = self.BASE_API_URL + '/sendDocument'
             resp = requests.post(url, data=tg_data, files=files)
             self.check_response(resp)
+
+
+class PushBullet(Transport):
+    """
+    PushBullet transport
+    """
+
+    NAME = 'pushbullet'
+    CAPS = Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS | Cap.ATTACHMENTS
+
+    @classmethod
+    def configure_argparser(self, parser):
+        parser.add_argument(
+            '--pushbullet-token',
+            required=True
+        )
+        super(PushBullet, self).configure_argparser(parser)
+
+    def __init__(self, token):
+        token = str(token)
+        if not token:
+            msg = 'Missing pushbullet API token'
+            raise ValueError(msg)
+
+        self.pb = pushbullet.PushBullet(token)
+
+    def check_response(self, resp):
+        if resp.status_code != 200:
+            errmsg = 'code={code}, description={description}'
+            errmsg = errmsg.format(code=resp.status_code,
+                                   description=resp.json()['description'])
+            raise SendError(errmsg)
+
+        resp = resp.json()
+        if not resp.get('ok'):
+            raise SendError(repr(resp))
+
+        return resp['result']
+
+    def send(self, destination, message, details='', attachments=None):
+        try:
+            device = self.pb.get_device(destination)
+        except pushbullet.errors.PushbulletError as e:
+            raise ValueError(destination) from e
+
+        if not attachments:
+            device.push_note(message, details)
+            return
+
+        composed = message
+        if details:
+            composed = "\n" + details
+
+        for fp in attachments:
+            with open(fp, 'rb') as fh:
+                name = os.path.splitext(os.path.basename(fp))[0]
+                uploaded = self.pb.upload_file(fh, name)
+                self.pb.push_file(body=composed, **uploaded)
 
 
 def build_transport(cls_or_name, params):

@@ -54,7 +54,7 @@ class Motion(Beacon):
             ! fakesink
     """
 
-    SUB_PIPES = {
+    BRANCHES = {
         'live': """
             queue name=live-input \
             ! videoconvert \
@@ -64,8 +64,8 @@ class Motion(Beacon):
 
         'snapshot': """
             queue name=snapshot-input \
-            ! jpegenc name=snapshot-encoder \
-            ! filesink location=a.jpg
+            ! jpegenc \
+            ! filesink name=snapshot-filesink location={snapshot_output}.jpg
         """,
 
         'encode': """
@@ -112,22 +112,29 @@ class Motion(Beacon):
         e.set_state(Gst.State.PLAYING)
         check_state(e, Gst.State.PLAYING)
 
-    def link(self, name, **params):
-        description = self.SUB_PIPES[name].strip()
-        description = description.format(**params)
+    def link(self, name, play=True, pipeline_params=None):
+        if pipeline_params is None:
+            pipeline_params = {}
 
-        print("Connect", name, description)
-        sub_pipe = self.parse(description)
-        sub_pipe.name = name + '-pipeline'
+        desc = self.BRANCHES[name].strip()
+        desc = desc.format(**pipeline_params)
+
+        print("Connect", name, desc)
+        branch = self.parse(desc)
+        branch.name = name + '-pipeline'
         src = self.pipeline.get_by_name('output')
-        sink = sub_pipe.get_by_name(name + '-input')
+        sink = branch.get_by_name(name + '-input')
 
-        with self.pause():
-            self.pipeline.add(sub_pipe)
-            src.link(sink)
+        self.pipeline.set_state(Gst.State.PAUSED)
 
-        self.subpipelines[name] = sub_pipe
-        return sub_pipe
+        self.pipeline.add(branch)
+        src.link(sink)
+
+        if play:
+            self.pipeline.set_state(Gst.State.PLAYING)
+
+        self.subpipelines[name] = branch
+        return branch
 
     def unlink(self, name):
         if name not in self.subpipelines:
@@ -165,52 +172,43 @@ class Motion(Beacon):
         self.unlink('live')
 
     def start_capture(self, output):
-        self.link('encode', encode_output=output)
+        self.link('encode', pipeline_params={'encode_output': output})
 
     def stop_capture(self):
         self.unlink('encode')
 
-    def snapshot(self):
-        el = None
-        pad = None
-        signal_id = 0
-        probe_id = 0
+    def snapshot(self, output):
         done = False
+        finalize_sched = False
 
-        def _on_pad_added(src, pad):
-            pad.add_probe(Gst.PadProbeType.BUFFER, _pad_probe)
+        def pad_probe(pad, info):
+            nonlocal done, finalize_sched
 
-        def _pad_probe(pad, info):
-            nonlocal done
             if not done:
-                print("Probe called")
-                done = True
-                GLib.idle_add(_finalize_snapshot)
                 return Gst.PadProbeReturn.PASS
-            else:
-                print("Drop")
-                return Gst.PadProbeReturn.DROP
+
+            if not finalize_sched:
+                finalize_sched = True
+                GLib.idle_add(_finalize_snapshot)
+
+            return Gst.PadProbeReturn.DROP
 
         def _finalize_snapshot():
-            print("Finalize called")
-            nonlocal pad
-            nonlocal probe_id
-            nonlocal signal_id
-
-            if probe_id:
-                pad.remove_probe(probe_id)
-                probe_id = 0
-
-            if signal_id:
-                el.disconnect(signal_id)
-                signal_id = 0
-
             self.unlink('snapshot')
             return False
 
-        el = self.pipeline.get_by_name('output')
-        signal_id = el.connect('pad-added', _on_pad_added)
-        self.link('snapshot')
+        branch = self.link(
+            'snapshot',
+            play=False,
+            pipeline_params={'snapshot_output': output})
+
+        filesink = branch.get_by_name('snapshot-filesink')
+        assert(len(filesink.sinkpads) == 1)
+
+        pad = filesink.sinkpads[0]
+        pad.add_probe(Gst.PadProbeType.BUFFER, pad_probe)
+
+        self.pipeline.set_state(Gst.State.PLAYING)
 
     def debug_message(self, message):
         return
@@ -301,7 +299,7 @@ class App:
 
     def on_motion_begin(self, _):
         print("Motion begin")
-        # self.motion.snapshot()
+        self.motion.snapshot(datetime.now().strftime('%Y.%m.%d-%H.%M.%S'))
         self.motion.start_capture(datetime.now().strftime('%Y.%m.%d-%H.%M.%S'))
         self.motion.start_live()
 
