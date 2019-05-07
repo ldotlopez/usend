@@ -1,18 +1,8 @@
-#!/usr/bin/env python3
-
-# py2/py3 compat
-from __future__ import print_function
-from six import raise_from
-from six.moves import configparser
-
-
-# stdlib
-import argparse
-import os.path
-import re
-import subprocess
 import sys
-from io import open
+import subprocess
+
+
+from hkos.blocks.usend import (Transport, Capability, SendError)
 
 
 # 3rd parties
@@ -30,7 +20,7 @@ import smtplib
 import pushbullet
 
 
-# Native linux
+# FreeDesktop
 if sys.platform == 'linux':
     try:
         import gi
@@ -46,68 +36,9 @@ def check_is_email(s):
     return re.search(r'(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)', s)
 
 
-class TransportNotFound(Exception):
-    pass
-
-
-class SendError(Exception):
-    pass
-
-
-class Transport(object):
-    @classmethod
-    def configure_argparser(cls, parser):
-        """
-        Support for command line application
-        """
-        if cls.CAPS & Cap.RECIEVER:
-            parser.add_argument(
-                '-t', '--to',
-                dest='destination',
-                required=True,
-            )
-
-        if cls.CAPS & Cap.ATTACHMENTS:
-            parser.add_argument(
-                '-a', '--attachment',
-                dest='attachments',
-                action='append'
-            )
-
-        if cls.CAPS & Cap.DETAILS:
-            parser.add_argument(
-                '--details',
-                dest='details',
-                nargs='?'
-            )
-
-        if cls.CAPS & Cap.MESSAGE:
-            parser.add_argument(
-                dest='message',
-                nargs='?'
-            )
-
-    def send(self, to=None, message=None, details=None, attachments=None):
-        raise NotImplementedError()
-
-
-class Cap(object):
-    NONE = 0
-    RECIEVER = 1 << 1
-    MESSAGE = 1 << 2
-    DETAILS = 1 << 3
-    ATTACHMENTS = 1 << 4
-    ALL = (
-        RECIEVER |
-        MESSAGE |
-        DETAILS |
-        ATTACHMENTS
-    )
-
-
 class Null(Transport):
     NAME = 'null'
-    CAPS = Cap.ALL
+    CAPS = Capability.ALL
 
     def send(self, destination=None, message=None, details=None,
              attachments=None):
@@ -116,7 +47,8 @@ class Null(Transport):
 
 class SMTP(Transport):
     NAME = 'smtp'
-    CAPS = (Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS | Cap.ATTACHMENTS)
+    CAPS = (Capability.RECIEVER | Capability.MESSAGE | Capability.DETAILS |
+            Capability.ATTACHMENTS)
 
     @classmethod
     def configure_argparser(cls, parser):
@@ -134,7 +66,7 @@ class SMTP(Transport):
             type=str,
             required=True
         )
-        super(SMTP, cls).configure_argparser(parser)
+        super().configure_argparser(parser)
 
     def __init__(self, sender, host='127.0.0.1', port=25):
         self.host = str(host)
@@ -197,7 +129,7 @@ class SMTP(Transport):
 
 class FreeDesktop(Transport):
     NAME = 'freedesktop'
-    CAPS = Cap.MESSAGE | Cap.DETAILS
+    CAPS = Capability.MESSAGE | Capability.DETAILS
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -211,8 +143,8 @@ class FreeDesktop(Transport):
 
 
 class MacOSDesktop(Transport):
-    NAME = 'macos-desktop'
-    CAPS = Cap.MESSAGE | Cap.DETAILS
+    NAME = 'macos'
+    CAPS = Capability.MESSAGE | Capability.DETAILS
 
     SCRIPT = 'display notification "{body}" with title "{message}"'
 
@@ -245,7 +177,8 @@ class Telegram(Transport):
     """
 
     NAME = 'telegram'
-    CAPS = Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS | Cap.ATTACHMENTS
+    CAPS = (Capability.RECIEVER | Capability.MESSAGE | Capability.DETAILS |
+            Capability.ATTACHMENTS)
 
     BASE_API_URL = 'https://api.telegram.org/bot{token}'
 
@@ -347,7 +280,8 @@ class PushBullet(Transport):
     """
 
     NAME = 'pushbullet'
-    CAPS = Cap.RECIEVER | Cap.MESSAGE | Cap.DETAILS | Cap.ATTACHMENTS
+    CAPS = (Capability.RECIEVER | Capability.MESSAGE | Capability.DETAILS |
+            Capability.ATTACHMENTS)
 
     @classmethod
     def configure_argparser(self, parser):
@@ -397,199 +331,3 @@ class PushBullet(Transport):
                 name = os.path.splitext(os.path.basename(fp))[0]
                 uploaded = self.pb.upload_file(fh, name)
                 self.pb.push_file(body=composed, **uploaded)
-
-
-def build_transport(cls_or_name, params):
-    if isinstance(cls_or_name, str):
-        cls = transport_for_name(cls_or_name)
-    elif isinstance(cls_or_name, Transport):
-        cls = cls_or_name
-    elif cls_or_name is None:
-        cls = transport_for_name(params.pop('backend'))
-    else:
-        raise TypeError(cls_or_name,
-                        'Transport class, string or None required')
-
-    if not isinstance(params, dict):
-        raise TypeError(params, 'dict required')
-
-    # Extract Transport.__init__ params
-    init_params = {}
-    remaining = {}
-
-    for (k, v) in params.items():
-        if k.startswith(cls.NAME + '_'):
-            k = k[len(cls.NAME) + 1:]
-            init_params[k] = v
-        else:
-            remaining[k] = v
-
-    transport = cls(**init_params)
-
-    return transport, remaining
-
-
-def transport_for_name(name, cls=Transport):
-    if getattr(cls, 'NAME', '') == name:
-        return cls
-
-    for subcls in cls.__subclasses__():
-        try:
-            return transport_for_name(name, cls=subcls)
-        except TransportNotFound:
-            pass
-
-    raise TransportNotFound()
-
-
-def load_profile(config, profile_name):
-    """
-    FIXME: generalize and move to core module
-    """
-    ret = {}
-    if not config.has_section(profile_name):
-        raise KeyError(profile_name)
-
-    for (name, value) in config.items(profile_name):
-        ret[name] = value
-
-    try:
-        includes = re.split(r"[\s,]+", ret.pop('!include'))
-    except KeyError:
-        return ret
-
-    for x in includes:
-        ret.update(load_profile(config, x))
-
-    return ret
-
-
-def configure_argparser_for_transport(parser, cls):
-    # if cls.CAPS & Cap.SENDER:
-    #     parser.add_argument(
-    #         '-f', '--from',
-    #         dest='send_from',
-    #         required=True,
-    #     )
-    if cls.CAPS & Cap.RECIEVER:
-        parser.add_argument(
-            '-t', '--to',
-            dest='send_to',
-            required=True,
-        )
-
-    if cls.CAPS & Cap.MESSAGE:
-        parser.add_argument(
-            dest='message',
-            nargs='?'
-        )
-
-    if cls.CAPS & Cap.DETAILS:
-        parser.add_argument(
-            dest='details',
-            nargs='?'
-        )
-
-    if cls.CAPS & Cap.ATTACHMENTS:
-        parser.add_argument(
-            '-a', '--attachment',
-            dest='attachments',
-            action='append'
-        )
-
-
-def load_config_files(config_files):
-    config = configparser.ConfigParser()
-
-    for config_file in config_files:
-        try:
-            with open(config_file, 'r', encoding='utf-8') as fh:
-                config.read_file(fh)
-            break
-
-        except OSError as e:
-            errmsg = "Can't read config file '{filepath}': {msg}"
-            errmsg = errmsg.format(filepath=config_file, msg=str(e))
-            print(errmsg, file=sys.stderr)
-
-    return config
-
-
-def main():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument(
-        '--transport',
-        default='',
-        dest='transport_name',
-        help='Transport to use.'
-    )
-    parser.add_argument(
-        '-c', '--conf',
-        default='',
-        dest='config_file',
-        help='Use config file.'
-    )
-    parser.add_argument(
-        '--profile',
-        dest='profile_name',
-        default='',
-    )
-    parser.add_argument(
-        '--help',
-        dest='help',
-        action='store_true'
-    )
-    args, remaining = parser.parse_known_args(sys.argv[1:])
-
-    # Read config
-    default_config_files = [
-        os.path.expanduser('~/.config/usend.ini'),
-        os.path.expanduser('~/.usend.ini')
-    ]
-    if args.config_file:
-        config = load_config_files([args.config_file])
-    else:
-        config = load_config_files(default_config_files)
-
-    # Load profile if defined
-    if args.profile_name:
-        profile = load_profile(config, args.profile_name)
-    else:
-        profile = {}
-
-    # Get transport
-    transport_name = (
-        args.transport_name or
-        profile.get('transport', None)
-        or ''
-    )
-    if not transport_name:
-        parser.print_help()
-        print("Transport param is required", file=sys.stderr)
-        sys.exit(1)
-
-    # Rebuild parser
-    transport_cls = transport_for_name(transport_name)
-    transport_cls.configure_argparser(parser)
-
-    # Cleanup params
-    args = parser.parse_args(sys.argv[1:])
-    if args.help:
-        parser.print_help()
-        sys.exit(1)
-
-    params = vars(args)
-    for k in ['config_file', 'profile_name', 'transport_name', 'help']:
-        params.pop(k, None)
-
-    transport, send_params = build_transport(transport_name, params)
-    try:
-        transport.send(**send_params)
-    except SendError as e:
-        msg = "Send failed: {err}"
-        msg = msg.format(err=str(e))
-        print(msg, file=sys.stderr)
-
-
-if __name__ == '__main__':
-    main()
