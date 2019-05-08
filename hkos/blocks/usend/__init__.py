@@ -1,3 +1,6 @@
+from hkos.blocks import classloader
+
+
 class Transport(object):
     @classmethod
     def configure_argparser(cls, parser):
@@ -54,3 +57,68 @@ class Capability(object):
 
 class SendError(Exception):
     pass
+
+
+def split_params(transport_cls, params):
+    init_params = {}
+    send_params = {}
+
+    for (k, v) in params.items():
+        if k.startswith(transport_cls.NAME + '_'):
+            k = k[len(transport_cls.NAME) + 1:]
+            init_params[k] = v
+        else:
+            send_params[k] = v
+
+    transport = transport_cls(**init_params)
+
+    return init_params, send_params
+
+
+def build_transport(name, **params):
+    loader = get_default_loader()
+    cls = loader.get(name)
+    init_params, send_params = split_params(cls, params)
+
+    transport = cls(**init_params)
+    return transport, send_params
+
+
+class USendLoader(classloader.ClassLoader):
+    PLUGINS = [
+        ('null', 'hkos.blocks.usend.transports.Null'),
+        ('mail', 'hkos.blocks.usend.transports.SMTP'),
+        ('freedesktop', 'hkos.blocks.usend.transports.FreeDesktop'),
+        ('macos', 'hkos.blocks.usend.transports.MacOSDesktop'),
+        ('pushbullet', 'hkos.blocks.usend.transports.PushBullet'),
+        ('telegram', 'hkos.blocks.usend.transports.Telegram'),
+    ]
+
+    def __init__(self):
+        super().__init__(Transport)
+
+    @classmethod
+    def get_default(cls):
+        self = cls()
+
+        for (name, objpath) in self.PLUGINS:
+            self.register(name, objpath)
+
+        return self
+
+
+def send(transport, transport_params, send_params):
+    if isinstance(transport, str):
+        loader = USendLoader.get_default()
+        transport = loader.get(transport)
+
+    if isinstance(transport, type) and issubclass(transport, Transport):
+        if transport_params:
+            transport = transport(**transport_params)
+        else:
+            transport = transport()
+
+    if not isinstance(transport, Transport):
+        raise TypeError(transport)
+
+    return transport.send(**send_params)

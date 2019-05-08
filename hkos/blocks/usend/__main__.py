@@ -10,22 +10,6 @@ from hkos.blocks import classloader
 from hkos.blocks import usend
 
 
-def split_params(transport_cls, params):
-    init_params = {}
-    send_params = {}
-
-    for (k, v) in params.items():
-        if k.startswith(transport_cls.NAME + '_'):
-            k = k[len(transport_cls.NAME) + 1:]
-            init_params[k] = v
-        else:
-            send_params[k] = v
-
-    transport = transport_cls(**init_params)
-
-    return init_params, send_params
-
-
 def load_profile(config, profile_name):
     """
     FIXME: generalize and move to core module
@@ -137,13 +121,6 @@ def main():
     else:
         profile = {}
 
-    loader = classloader.ClassLoader(usend.Transport)
-    loader.register('null', 'hkos.blocks.usend.transports.Null')
-    loader.register('mail', 'hkos.blocks.usend.transports.SMTP')
-    loader.register('freedesktop', 'hkos.blocks.usend.transports.FreeDesktop')
-    loader.register('macos', 'hkos.blocks.usend.transports.MacOSDesktop')
-    loader.register('pushbullet', 'hkos.blocks.usend.transports.PushBullet')
-
     # Get transport
     transport_name = (
         args.transport_name or
@@ -156,6 +133,7 @@ def main():
         sys.exit(1)
 
     # Rebuild parser
+    loader = usend.USendLoader.get_default()
     transport_cls = loader.get(transport_name)
     transport_cls.configure_argparser(parser)
 
@@ -170,7 +148,7 @@ def main():
     for k in ['config_file', 'profile_name', 'transport_name', 'help']:
         params.pop(k, None)
 
-    init_params, send_params = split_params(transport_cls, params)
+    init_params, send_params = usend.split_params(transport_cls, params)
     transport = transport_cls(**init_params)
 
     try:

@@ -76,7 +76,7 @@ class SMTP(Transport):
         try:
             self.sender = str(sender)
         except ValueError as e:
-            raise_from(ValueError(sender, 'not a valid email'), e)
+            raise ValueError(sender, 'not a valid email') from e
         if not check_is_email(self.sender):
             raise ValueError(self.sender, 'not a valid email')
 
@@ -84,7 +84,7 @@ class SMTP(Transport):
         try:
             self.port = int(port)
         except ValueError as e:
-            raise_from(ValueError(port, 'invalid port'), e)
+            raise ValueError(port, 'invalid port') from e
         if self.port < 1:
             raise ValueError(port, 'invalid port')
 
@@ -228,7 +228,7 @@ class Telegram(Transport):
                 errmsg = ("user {username} not found. "
                           "(try sending /start to the bot)")
                 errmsg = errmsg.format(username=destination)
-                raise raise_from(SendError(errmsg), e)
+                raise SendError(errmsg) from e
 
         if not attachments:
             attachments = []
