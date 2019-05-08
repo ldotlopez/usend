@@ -1,6 +1,89 @@
 import importlib
 
 
+def get_obj(spec):
+    parts = spec.split('.')
+    mod = '.'.join(parts[:-1])
+    name = parts[-1]
+
+    try:
+        m = importlib.import_module(mod)
+    except ModuleNotFoundError as e:
+        raise LoadError(e.name) from e
+
+    try:
+        obj = getattr(m, name)
+    except AttributeError as e:
+        raise UnknowPluginError(spec) from e
+
+    return obj
+
+
+class RawLoader:
+    def __init__(self):
+        self.reg = {}
+
+    def __iter__(self):
+        yield from self.reg
+
+    def register(self, name, target):
+        if name in self.reg:
+            raise DuplicatedTargetError(name)
+        self.reg[name] = target
+
+    def get(self, name):
+        try:
+            return self.reg[name]
+        except KeyError as e:
+            raise UnknownTargetError(name)
+
+    def get_target_name(self, target):
+        rev = {target: name for (name, target) in self.reg.items()}
+
+        try:
+            return rev[target]
+        except KeyError as e:
+            raise UnknownTargetError(cls) from e
+
+
+class ClassLoader2(RawLoader):
+    def __init__(self, basecls, lazy=Flase):
+        self.basecls = basecls
+        self.lazyloading = lazy
+
+    def register(self, name, clsspec):
+        if self.lazyloading:
+            target = clsspec
+
+        else:
+            target = get_obj(clsname)
+            if not isinstance(target, self.basecls):
+                raise TypeError(target)
+
+        super().register(name, target)
+
+    def get(self, name):
+        target = super().get(name)
+        if self.lazyloading:
+            return get_obj(target)
+        else:
+            return target
+
+
+# class Loader:
+#     def __init__(self, cls=object):
+#         self.basecls = cls
+#         self.reg = {}
+
+#     def register(self, name, spec):
+#         try:
+#             cls = get_obj(spec)
+#         except ModuleNotFoundError as e:
+#             raise LoadError(e.name) from e
+#         except AttributeError as e:
+#             raise UnknowPluginError(spec) from e
+
+
 class ClassLoader:
     def __init__(self, cls=object):
         self.basecls = cls
