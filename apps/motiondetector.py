@@ -112,12 +112,12 @@ class Motion(Beacon):
         e.set_state(Gst.State.PLAYING)
         check_state(e, Gst.State.PLAYING)
 
-    def link(self, name, play=True, pipeline_params=None):
-        if pipeline_params is None:
-            pipeline_params = {}
+    def link(self, name, play=True, options=None):
+        if options is None:
+            options = {}
 
         desc = self.BRANCHES[name].strip()
-        desc = desc.format(**pipeline_params)
+        desc = desc.format(**options)
 
         print("Connect", name, desc)
         branch = self.parse(desc)
@@ -172,7 +172,7 @@ class Motion(Beacon):
         self.unlink('live')
 
     def start_capture(self, output):
-        self.link('encode', pipeline_params={'encode_output': output})
+        self.link('encode', options={'encode_output': output})
 
     def stop_capture(self):
         self.unlink('encode')
@@ -185,6 +185,7 @@ class Motion(Beacon):
             nonlocal done, finalize_sched
 
             if not done:
+                done = True
                 return Gst.PadProbeReturn.PASS
 
             if not finalize_sched:
@@ -200,46 +201,18 @@ class Motion(Beacon):
         branch = self.link(
             'snapshot',
             play=False,
-            pipeline_params={'snapshot_output': output})
+            options={'snapshot_output': output})
 
         filesink = branch.get_by_name('snapshot-filesink')
         assert(len(filesink.sinkpads) == 1)
 
         pad = filesink.sinkpads[0]
         pad.add_probe(Gst.PadProbeType.BUFFER, pad_probe)
-
         self.pipeline.set_state(Gst.State.PLAYING)
 
-    def debug_message(self, message):
-        return
-        ignore_types = [
-            Gst.MessageType.ASYNC_DONE,
-            Gst.MessageType.NEW_CLOCK,
-            Gst.MessageType.STREAM_START,
-            Gst.MessageType.STREAM_STATUS,
-        ]
-
-        if message.type in ignore_types:
-            return
-
-        msg = "[MSG] {name}\t{type}"
-        msg = msg.format(name=message.src.name,
-                         type=str(message.type.first_value_name))
-        print(msg)
-
-        if message.type == Gst.MessageType.STATE_CHANGED:
-            old, new, pending = message.parse_state_changed()
-            print("({}) {} -> {}".format(pending, old, new))
-
     def on_bus_message(self, bus, message):
-        self.debug_message(message)
-        if message.src.name == 'snapshot-encoder' or message.src == self.subpipelines.get('snapshot'):
-            self.debug_message(message)
-
         if message.type == Gst.MessageType.ELEMENT:
             msgparams = parse_element_message(message)
-            # print("Message from", message.src.name)
-            # print(repr(msgparams))
 
             if message.src is self.pipeline.get_by_name('motion-detector'):
                 self.on_motion_detector_message(msgparams)
@@ -273,10 +246,6 @@ class App:
     def __init__(self):
         self.loop = GLib.MainLoop()
         self.motion = Motion(
-            # src=("v4l2src device=/dev/video2 "
-            #      "! image/jpeg,width=1280,height=720"),
-            # src=("rtspsrc "
-            #      "location=rtsp://admin:xxx@192.168.1.137/onvif1"),
             gap=3
         )
         self.motion.watch('ready', lambda x: print("Ready"))
