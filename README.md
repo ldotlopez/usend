@@ -30,7 +30,30 @@ sudo reboot
 ```
 
 Links:
-(read-only file system)[https://github.com/adafruit/Raspberry-Pi-Installer-Scripts/blob/master/read-only-fs.sh]
+
+* [read-only file system](https://github.com/adafruit/Raspberry-Pi-Installer-Scripts/blob/master/read-only-fs.sh)
+
+
+## WebCam
+
+### Stream to youtube
+
+Using ffmpeg and a h264-capable webcam
+
+```
+ffmpeg  -re -strict experimental \
+	-f v4l2 -input_format h264 -framerate 15 -video_size 1280x720 -i /dev/video0 \
+	-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 \
+	-c:v copy \
+	-c:a libmp3lame -ab 128k -ar 44100 \
+	-f flv "rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx-xxxx-xxxx"
+```
+
+*Notes:*
+
+* YouTube is very strict about streams, any subtle changes on any parameter may broke stream process on yt side.
+* We are using **-input_format h264** to get h264 from webcam and **-c:v copy** to pass it directly to the flv muxer
+* We are generating a dumb audio stream (**-f lavfi -i anullsrc**) instead of using audio from webcam
 
 
 ## Videosec

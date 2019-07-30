@@ -1,16 +1,21 @@
 import hkos.utils
 
+
+import collections
 import datetime
+import math
 import time
-from math import radians, cos, sin, asin, sqrt
+
 
 import croniter
-import collections
 
 
-class App():
-    def __init__(self, events):
-        self.events = events
+EARTH_RADIUS = 6_371_000
+
+
+class App:
+    def __init__(self, rules):
+        self.rules = rules
 
     def run(self, where, when):
         if when is None:
@@ -25,60 +30,103 @@ class App():
         else:
             raise TypeError(when)
 
-        for (name, params) in self.events.items():
-            it1 = croniter.croniter(params['time-start'], when)
-            it2 = croniter.croniter(params['time-end'], when)
-            dt_start = datetime.datetime.fromtimestamp(it1.get_next())
-            dt_end = datetime.datetime.fromtimestamp(it2.get_next())
-
-            if dt_start > dt_end:
+        for (name, rule) in self.rules.items():
+            if rule.match(location=where, time=when):
                 print(name)
 
 
-_Location = collections.namedtuple(
-    '_Location',
-    ['latitude', 'longitude'])
-
-
-class Location(_Location):
-    def __new__(cls, latitude, longitude):
+class Location:
+    def __init__(self, latitude, longitude):
         if not all([
                 isinstance(x, (float, int))
                 for x in (latitude, longitude)]):
-            raise ValueError("latitude and longitude")
+            raise ValueError("latitude and longitude must be floats")
+
+        self.latitude = latitude
+        self.longitude = longitude
+
+    @classmethod
+    def fromstring(cls, s):
+        lat, lng = s.split(',')
+        lat = float(lat)
+        lng = float(lng)
+
+        return cls(lat, lng)
+
+    def __repr__(self):
+        return 'Location(%f, %f)' % (self.latitude, self.longitude)
+
+    def haversine(self, other):
+        lon1, lat1, lon2, lat2 = map(
+            math.radians,
+            [self.longitude, self.latitude, other.longitude, other.latitude])
+
+        # haversine formula
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = (math.sin(dlat / 2)**2 +
+             math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2)
+        c = 2 * math.asin(math.sqrt(a))
+        meters = EARTH_RADIUS * c
+
+        return meters
+
+    def equirectangular(self, other):
+        lon1, lat1, lon2, lat2 = map(
+            math.radians,
+            [self.longitude, self.latitude, other.longitude, other.latitude])
+
+        x = (lon2 - lon1) * math.cos(0.5*(lat2+lat1))
+        y = lat2 - lat1
+        d = EARTH_RADIUS * math.sqrt(x**2 + y**2)
+
+        return d
 
 
-_Rule = collections.namedtuple(
-    '_Rule',
-    ['time_start', 'time_end', 'location', 'location_radius']
-)
-
-
-class Rule(_Rule):
-    def __new__(cls, time_start=None, time_end=None,
-                location=None, location_radius=None):
+class Rule:
+    def __init__(self,
+                 time_start=None, time_end=None,
+                 location=None, location_radius=100):
         if not time_start and not location:
             raise ValueError("time_start or location required")
 
-        if not (
-                isinstance(location, (list, tuple))
-                and len(location) == 2):
-            raise TypeError("location must be a tuple or list")
+        if location and not isinstance(location, Location):
+            raise TypeError("location must be a Location")
 
-        return super().__new__(cls, time_start, time_end, location,
-                               location_radius)
+        self.time_start = time_start
+        self.time_end = time_end
+        self.location = location
+        self.location_radius = location_radius
+
+    def __repr__(self):
+        retstr = ("Rule(time_start=%r, time_end=%r, "
+                  "location=%r, location_radius=%d meters')")
+        return retstr % (self.time_start, self.time_end,
+                         self.location, self.location_radius)
 
     def match(self, location=None, time=None):
         def match_location():
             if not location:
                 return True
 
-            return (equirectangular(self.location, location)
-                    <= self.location_radius)
+            distance = self.location.equirectangular(location)
+            return (distance <= self.location_radius)
 
         def match_time():
             if not time:
                 return True
+
+            if not (self.time_start and self.time_end):
+                excmsg = ("rules without both start and end time are not "
+                          "supported")
+                raise NotImplementedError(excmsg)
+
+            it1 = croniter.croniter(self.time_start, time)
+            it2 = croniter.croniter(self.time_end, time)
+            dt_start = datetime.datetime.fromtimestamp(it1.get_next())
+            dt_end = datetime.datetime.fromtimestamp(it2.get_next())
+
+            return dt_start > dt_end
 
         if not location and not time:
             raise ValueError("location or time requiered")
@@ -86,92 +134,31 @@ class Rule(_Rule):
         return match_time() and match_location()
 
 
-def match(latlng, time, rulespec):
-    it1 = croniter.croniter(rulespec['time-start'], time)
-    it2 = croniter.croniter(rulespec['time-end'], time)
-    dt_start = datetime.datetime.fromtimestamp(it1.get_next())
-    dt_end = datetime.datetime.fromtimestamp(it2.get_next())
-
-    dist = equirectangular(latlng, rulespec['space-point'])
-
-    return dt_start > dt_end and dist <= rulespec['space-radius']
-
-
-def haversine(p1, p2):
-    lon1, lat1, lon2, lat2 = map(radians, [p1[0], p1[1], p2[0], p2[1]])
-    # haversine formula
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon/2) ** 2
-    c = 2 * asin(sqrt(a))
-    # Radius of earth in kilometers is 6371
-    meters = 6_371_000 * c
-    return meters
-
-
-def equirectangular(p1, p2):
-    lon1, lat1, lon2, lat2 = map(radians, [p1[0], p1[1], p2[0], p2[1]])
-
-    R = 6_371_100
-    x = (lon2 - lon1) * cos(0.5*(lat2+lat1))
-    y = lat2 - lat1
-    d = R * sqrt(x**2 + y**2)
-
-    return d
-
-
-def load_config():
-    cp = hkos.utils.load_config_file('spacetime-events')
-    return {sect: dict(cp[sect].items())
-            for sect in cp.sections()}
-
-
-def parse_spacetime(reqstr):
-    if '@' in reqstr:
-        geostr, timestr = reqstr.split('@', 1)
+def load_config(filepath=None):
+    if filepath is None:
+        cp = hkos.utils.load_config_file('spacetimeevents')
     else:
-        geostr, timestr = '40,0', reqstr
+        with open(filepath, 'r', encoding='utf-8') as fh:
+            cp.read_file(fh)
 
-    return parse_geo(geostr), parse_time(timestr)
+    cfg = {sect: dict(cp[sect].items())
+           for sect in cp.sections()}
 
+    rules = {}
+    for (name, params) in cfg.items():
 
-def parse_geo(geostr):
-    lat, lng = geostr.split(',')
-    lat = float(lat)
-    lng = float(lng)
+        if 'location' in params:
+            params['location'] = Location.fromstring(params['location'])
 
-    return lat, lng
+        if 'location-radius' in params:
+            params['location-radius'] = float(params['location-radius'])
 
+        params = {k.replace('-', '_'): v for (k, v) in params.items()}
+        rules[name] = Rule(**params)
 
-def parse_time(timestr, base_dt=None):
-    if base_dt is None:
-        base_dt = datetime.datetime.now()
-        base_dt = base_dt.astimezone()
-
-    dt_formats = [
-        ('%Y-%m-%d %H:%M:%S',
-         ['year', 'month', 'day', 'hour', 'minute', 'second']),
-        ('%Y-%m-%d %H:%M',
-         ['year', 'month', 'day', 'hour', 'minute']),
-        ('%H:%M:%S',
-         ['hour', 'minute', 'second']),
-        ('%H:%M',
-         ['hour', 'minute']),
-    ]
-
-    if not timestr:
-        return base_dt
-
-    for (fmt, fields) in dt_formats:
-        try:
-            dt = datetime.datetime.strptime(timestr, fmt)
-            repls = {f: getattr(dt, f) for f in fields}
-            return base_dt.replace(**repls)
-
-        except ValueError:
-            pass
-
-    raise ValueError(timestr)
+    return {
+        'rules': rules
+    }
 
 
 def main():
@@ -189,10 +176,12 @@ def main():
     )
     args = parser.parse_args(sys.argv[1:])
 
-    where = parse_time(args.space) if args.space else None
-    when = parse_time(args.time) if args.time else None
+    where = Location.fromstring(args.space) if args.space else None
+    when = hkos.utils.parse_time(args.time) if args.time else None
 
-    app = App(events=load_config())
+    config = load_config()
+
+    app = App(rules=config['rules'])
     app.run(where, when)
 
 
