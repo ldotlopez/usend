@@ -10,7 +10,7 @@
     ],
     "SublimeLinter":
     {
-        "@python": 2.7,
+        "@python": 3.7,
         "linters":
         {
             "flake8":

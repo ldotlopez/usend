@@ -26,22 +26,22 @@ import datetime
 
 
 setup(
-    name='hkos',
+    name='usend',
     version='0.0.0.' + datetime.datetime.now().strftime('%Y%m%d%H%M%S'),
     author='Luis López',
     author_email='luis@cuarentaydos.com',
-    packages=['hkos'],
+    packages=['usend'],
     scripts=[],
-    url='https://github.com/ldotlopez/hkos',
+    url='https://github.com/ldotlopez/usend',
     license='LICENSE.txt',
     description=(
-        'HouseKeeper OS'
+        'Universal sender'
     ),
     long_description=open('README.md').read(),
     install_requires=open('requirements.txt').read().split('\n'),
     entry_points={
        'console_scripts': [
-            'usend=hkos.blocks.usend:main'
+            'usend=usend:main'
         ]
     }
 )
