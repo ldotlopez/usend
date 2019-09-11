@@ -24,3 +24,34 @@ def underscore_dict_keys(d, recurse=True):
         ret[k] = v
 
     return ret
+
+
+def parse_time(timestr, base_dt=None):
+    if base_dt is None:
+        base_dt = datetime.datetime.now()
+        base_dt = base_dt.astimezone()
+
+    dt_formats = [
+        ('%Y-%m-%d %H:%M:%S',
+         ['year', 'month', 'day', 'hour', 'minute', 'second']),
+        ('%Y-%m-%d %H:%M',
+         ['year', 'month', 'day', 'hour', 'minute']),
+        ('%H:%M:%S',
+         ['hour', 'minute', 'second']),
+        ('%H:%M',
+         ['hour', 'minute']),
+    ]
+
+    if not timestr:
+        return base_dt
+
+    for (fmt, fields) in dt_formats:
+        try:
+            dt = datetime.datetime.strptime(timestr, fmt)
+            repls = {f: getattr(dt, f) for f in fields}
+            return base_dt.replace(**repls)
+
+        except ValueError:
+            pass
+
+    raise ValueError(timestr)
