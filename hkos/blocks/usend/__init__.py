@@ -1,7 +1,39 @@
-from hkos.blocks import classloader
+import importlib
+import re
+
+
+class Parameter:
+    def __init__(self, name, required=False, type=str, default=None):
+        self.name = name
+        self.required = required
+        self.type = type
+        self.default = default
+
+
+class Capability(object):
+    NONE = 0
+    RECIEVER = 1 << 1
+    MESSAGE = 1 << 2
+    DETAILS = 1 << 3
+    ATTACHMENTS = 1 << 4
+    ALL = (
+        RECIEVER |
+        MESSAGE |
+        DETAILS |
+        ATTACHMENTS
+    )
 
 
 class Transport(object):
+    PARAMETERS = ()
+    CAPS = Capability.NONE
+
+    @classmethod
+    def name(cls):
+        bname = cls.__module__.split('.')[-1]
+        simplified = re.sub(r'[^a-zA-Z]+', '-', bname, flags=re.IGNORECASE).lower().strip('-')
+        return simplified
+
     @classmethod
     def configure_argparser(cls, parser):
         """
@@ -41,76 +73,49 @@ class Transport(object):
         raise NotImplementedError()
 
 
-class Capability(object):
-    NONE = 0
-    RECIEVER = 1 << 1
-    MESSAGE = 1 << 2
-    DETAILS = 1 << 3
-    ATTACHMENTS = 1 << 4
-    ALL = (
-        RECIEVER |
-        MESSAGE |
-        DETAILS |
-        ATTACHMENTS
-    )
+class ParameterError(Exception):
+    pass
 
 
 class SendError(Exception):
     pass
 
 
-def split_params(transport_cls, params):
+def split_params(transport_cls, **params):
     init_params = {}
     send_params = {}
 
+    transport_name = transport_cls.__module__.split('.')[-1]
+
     for (k, v) in params.items():
-        if k.startswith(transport_cls.NAME + '_'):
-            k = k[len(transport_cls.NAME) + 1:]
+        if k.startswith(transport_name + '_'):
+            k = k[len(transport_name) + 1:]
             init_params[k] = v
         else:
             send_params[k] = v
 
-    transport = transport_cls(**init_params)
-
     return init_params, send_params
 
 
-def build_transport(name, **params):
-    loader = get_default_loader()
-    cls = loader.get(name)
-    init_params, send_params = split_params(cls, params)
+def get_transport(name):
+    try:
+        m = importlib.import_module('usend.transports.' + name)
+    except ImportError as e:
+        print("Can't load transport: {}".format(e))
+        raise
 
-    transport = cls(**init_params)
-    return transport, send_params
+    try:
+        cls = getattr(m, 'Transport')
+    except AttributeError:
+        print("Invalid plugin")
+        raise
 
-
-class USendLoader(classloader.ClassLoader):
-    PLUGINS = [
-        ('null', 'hkos.blocks.usend.transports.Null'),
-        ('mail', 'hkos.blocks.usend.transports.SMTP'),
-        ('freedesktop', 'hkos.blocks.usend.transports.FreeDesktop'),
-        ('macos', 'hkos.blocks.usend.transports.MacOSDesktop'),
-        ('pushbullet', 'hkos.blocks.usend.transports.PushBullet'),
-        ('telegram', 'hkos.blocks.usend.transports.Telegram'),
-    ]
-
-    def __init__(self):
-        super().__init__(Transport)
-
-    @classmethod
-    def get_default(cls):
-        self = cls()
-
-        for (name, objpath) in self.PLUGINS:
-            self.register(name, objpath)
-
-        return self
+    return cls
 
 
 def send(transport, transport_params, send_params):
     if isinstance(transport, str):
-        loader = USendLoader.get_default()
-        transport = loader.get(transport)
+        transport = get_transport(transport)
 
     if isinstance(transport, type) and issubclass(transport, Transport):
         if transport_params:
@@ -121,4 +126,20 @@ def send(transport, transport_params, send_params):
     if not isinstance(transport, Transport):
         raise TypeError(transport)
 
+    return transport.send(**send_params)
+
+
+def send2(transport, **params):
+    if isinstance(transport, type) and \
+            issubclass(transport, Transport) and \
+            type(transport) != Transport:
+        transport_cls = transport
+    elif isinstance(transport, str):
+        transport_cls = get_transport(transport)
+    else:
+        err = "transport must be a str or a Trasport subclass"
+        raise TypeError(err)
+
+    transport_params, send_params = split_params(transport_cls, **params)
+    transport = transport_cls(**transport_params)
     return transport.send(**send_params)
