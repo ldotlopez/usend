@@ -32,103 +32,7 @@ def load_profile(config, profile_name):
     return ret
 
 
-def load_config_files(*config_files):
-    config = configparser.ConfigParser()
-
-    for config_file in config_files:
-        try:
-            with open(config_file, 'r', encoding='utf-8') as fh:
-                config.read_file(fh)
-            break
-
-        except OSError as e:
-            errmsg = "Can't read config file '{filepath}': {msg}"
-            errmsg = errmsg.format(filepath=config_file, msg=str(e))
-            print(errmsg, file=sys.stderr)
-
-    return config
-
-
-def main():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument(
-        '--transport',
-        default='',
-        dest='transport_name',
-        help='Transport to use.'
-    )
-    parser.add_argument(
-        '-c', '--conf',
-        default='',
-        dest='config_file',
-        help='Use config file.'
-    )
-    parser.add_argument(
-        '--profile',
-        dest='profile_name',
-        default='',
-    )
-    parser.add_argument(
-        '--help',
-        dest='help',
-        action='store_true'
-    )
-    args, remaining = parser.parse_known_args(sys.argv[1:])
-
-    # Read config
-    default_config_files = [
-        os.path.expanduser('~/.config/usend.ini'),
-        os.path.expanduser('~/.usend.ini')
-    ]
-    if args.config_file:
-        config = load_config_files(*args.config_file)
-    else:
-        config = load_config_files(*default_config_files)
-
-    # Load profile if defined
-    if args.profile_name:
-        profile = load_profile(config, args.profile_name)
-    else:
-        profile = {}
-
-    # Get transport
-    transport_name = (
-        args.transport_name or
-        profile.get('transport', None)
-        or ''
-    )
-    if not transport_name:
-        parser.print_help()
-        print("Transport param is required", file=sys.stderr)
-        sys.exit(1)
-
-    # Rebuild parser
-    transport_cls = usend.get_transport(transport_name)
-    transport_cls.configure_argparser(parser)
-
-    # --help support
-    args = parser.parse_args(sys.argv[1:])
-    if args.help:
-        parser.print_help()
-        sys.exit(1)
-
-    # Cleanup params
-    params = vars(args)
-    for k in ['config_file', 'profile_name', 'transport_name', 'help']:
-        params.pop(k, None)
-
-    init_params, send_params = usend.split_params(transport_cls, **params)
-    transport = transport_cls(**init_params)
-
-    try:
-        transport.send(**send_params)
-    except usend.SendError as e:
-        msg = "Send failed: {err}"
-        msg = msg.format(err=str(e))
-        print(msg, file=sys.stderr)
-
-
-def load_config_files2(*config_filepaths):
+def load_config_files(*config_filepaths):
     config = configparser.ConfigParser()
 
     for filepath in config_filepaths:
@@ -162,10 +66,7 @@ def get_basic_argument_parser():
         action='store_true')
     basic.add_argument(
         '-c', '--config',
-        default=[
-            os.path.expanduser('~/.config/usend.ini'),
-            os.path.expanduser('~/.usend.ini')
-        ],
+        default=[],
         action='append',
         required=False)
 
@@ -230,47 +131,58 @@ def configure_argparser_for_transport(parser, transport):
         )
 
 
-def main2():
+def main():
     import sys
 
     # Minimal parser
     parser = get_basic_argument_parser()
     args, argv = parser.parse_known_args(sys.argv[1:])
 
+    # Set some default config files if not provided from command line
+    if not args.config:
+        args.config = [
+            os.path.expanduser('~/.config/usend.ini'),
+            os.path.expanduser('~/.usend.ini')
+        ]
+
     # Show help if not transport is specified
     if args.help and not args.transport:
         parser.print_help()
         return
 
-    # Rebuild parser and reparse for transport
-    if args.transport:
-        parser = get_full_argument_parser(args.transport)
-        args = parser.parse_args(sys.argv[1:])
+    # Initialize params from config file (if any)
+    params = {}
+    if args.profile:
+        config = load_config_files(*args.config)
+        try:
+            params.update(config[args.profile])
+        except KeyError:
+            errmsg = "Profile '{name}' not found"
+            errmsg = errmsg.format(name=args.profile)
+            print(errmsg, file=sys.stderr)
+            return
 
+    # Determine transport
+    transport = params.pop('transport', None) or args.transport
+
+    # Ful parse arguments
+    parser = get_full_argument_parser(transport)
+    args = parser.parse_args(sys.argv[1:])
     if args.help:
         parser.print_help()
         return
 
-    # Load config if any
-    config = load_config_files2(*args.config)
-
-    print(repr(vars(args)))
-    print(repr(config))
-
-    if args.profile:
-        params = config.get(args.profile)
-    else:
-        params = {}
-
+    # Merge params from command line
     params.update({
         k: v
         for (k, v) in vars(args).items()
-        if k not in ('help', 'config', 'profile')
+        if k not in ('help', 'config', 'profile', 'transport') and v
     })
 
-    transport = params.pop('transport')
+    # Send
+    # transport = params.pop('transport')
     try:
-        usend.send2(transport, **params)
+        usend.send(transport, **params)
     except usend.ParameterError as e:
         errmsg = (
             "Error: {e}\n" +
@@ -281,4 +193,4 @@ def main2():
 
 
 if __name__ == '__main__':
-    main2()
+    main()

@@ -30,9 +30,12 @@ class Transport(object):
 
     @classmethod
     def name(cls):
-        bname = cls.__module__.split('.')[-1]
-        simplified = re.sub(r'[^a-zA-Z]+', '-', bname, flags=re.IGNORECASE).lower().strip('-')
-        return simplified
+        name = cls.__module__.split('.')[-1]
+        name = name.lower()
+        name = re.sub(r'[^a-zA-Z]+', '-', name, flags=re.IGNORECASE)
+        name = name.lower()
+        name = name.strip('-')
+        return name
 
     @classmethod
     def configure_argparser(cls, parser):
@@ -113,23 +116,7 @@ def get_transport(name):
     return cls
 
 
-def send(transport, transport_params, send_params):
-    if isinstance(transport, str):
-        transport = get_transport(transport)
-
-    if isinstance(transport, type) and issubclass(transport, Transport):
-        if transport_params:
-            transport = transport(**transport_params)
-        else:
-            transport = transport()
-
-    if not isinstance(transport, Transport):
-        raise TypeError(transport)
-
-    return transport.send(**send_params)
-
-
-def send2(transport, **params):
+def send(transport, **params):
     if isinstance(transport, type) and \
             issubclass(transport, Transport) and \
             type(transport) != Transport:
